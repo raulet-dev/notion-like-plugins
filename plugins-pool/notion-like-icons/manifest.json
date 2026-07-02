@@ -1,0 +1,9 @@
+{
+    "id": "notion-like-icons",
+    "name": "Notion-style Note Icons",
+    "version": "1.0.0",
+    "minAppVersion": "0.15.0",
+    "description": "Adds customizable Notion-style icons to notes using image URLs.",
+    "author": "Raul Paya",
+    "isDesktopOnly": false
+}

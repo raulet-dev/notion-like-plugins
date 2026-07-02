@@ -1,0 +1,9 @@
+{
+    "id": "notion-like-plugins",
+    "name": "Notion-style Plugins",
+    "version": "1.0.0",
+    "minAppVersion": "0.15.0",
+    "description": "Adds customizable Notion-style plugins",
+    "author": "Raul Paya",
+    "isDesktopOnly": false
+}
