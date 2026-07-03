@@ -26,13 +26,11 @@ module.exports = class NotionColorMenuPlugin extends Plugin {
 
         this.registerEvent(
             this.app.workspace.on('editor-menu', (menu, editor, view) => {
-                // Look for selections and actively discover hidden spans in Live Preview
                 let targetData = this.detectAndExpandSpanSelection(editor);
                 if (!targetData.text || targetData.text.trim() === "") return;
 
                 menu.addSeparator();
 
-                // 1. Text Color Dropdown
                 menu.addItem((item) => {
                     item.setTitle("Text Color").setIcon("type").setSubmenu();
 
@@ -55,7 +53,7 @@ module.exports = class NotionColorMenuPlugin extends Plugin {
                                     const replacement = `<span style="color: ${c.hex};">${targetData.cleanText}</span>`;
                                     editor.replaceSelection(replacement);
                                 });
-                            
+
                             setTimeout(() => {
                                 if (subItem.dom) {
                                     subItem.dom.style.color = c.hex;
@@ -66,7 +64,6 @@ module.exports = class NotionColorMenuPlugin extends Plugin {
                     });
                 });
 
-                // 2. Background Dropdown
                 menu.addItem((item) => {
                     item.setTitle("Background Color").setIcon("highlighter").setSubmenu();
 
@@ -106,37 +103,31 @@ module.exports = class NotionColorMenuPlugin extends Plugin {
         );
     }
 
-    // Advanced selection handler to trap hidden HTML markup tokens in Live Preview editor states
     detectAndExpandSpanSelection(editor) {
         let from = editor.getCursor("from");
         let to = editor.getCursor("to");
-        
-        // 1. Snag original coordinates and text block lines
+
         let rawSelectedText = editor.getSelection();
         let lineText = editor.getLine(from.line);
-        
-        // 2. Expand horizons dynamically to look for wrapping span tags hidden by Live Preview engine
-        let extendedFromOffset = Math.max(0, from.ch - 150); 
+
+        let extendedFromOffset = Math.max(0, from.ch - 150);
         let extendedToOffset = Math.min(lineText.length, to.ch + 50);
-        
+
         let contextLeft = lineText.substring(extendedFromOffset, from.ch);
         let contextRight = lineText.substring(to.ch, extendedToOffset);
-        
+
         let startPos = { line: from.line, ch: from.ch };
         let endPos = { line: to.line, ch: to.ch };
-        
-        // Match expressions for open/close tags
+
         let leftSpanMatch = contextLeft.match(/<span style="[^"]*">[^<>]*$/i);
         let rightSpanMatch = contextRight.match(/^[^<>]*<\/span>/i);
-        
+
         if (leftSpanMatch && rightSpanMatch) {
-            // Found hidden span code block wrapping selection! Readjust selection points out over the tags
             startPos.ch = extendedFromOffset + leftSpanMatch.index;
             endPos.ch = to.ch + rightSpanMatch[0].length;
             rawSelectedText = lineText.substring(startPos.ch, endPos.ch);
         }
 
-        // Clean out formatting to make sure replacement processing remains mutually exclusive
         let cleanText = rawSelectedText.replace(/<(span|font)[^>]*>([\s\S]*?)<\/\1>/gi, '$2');
 
         return {

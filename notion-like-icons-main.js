@@ -4,6 +4,8 @@ const DEFAULT_SETTINGS = {
     icons: {} // Maps "iconName" -> "filename.png"
 };
 
+const ICONS_FOLDER = "ZZ - Dependencies/notion-like-plugins/notion-like-icons"
+
 const ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif', 'image/svg+xml'];
 
 module.exports = class NotionIconPlugin extends Plugin {
@@ -87,7 +89,7 @@ module.exports = class NotionIconPlugin extends Plugin {
 
     // CONSTANT PATH: Always points exactly to your vault root directory
     getIconFolderPath() { 
-        return '.notion-like-icons'; 
+        return ICONS_FOLDER; 
     }
 
     async ensureIconFolder() {

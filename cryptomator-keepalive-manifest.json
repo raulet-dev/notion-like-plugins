@@ -1,0 +1,7 @@
+{
+    "id": "cryptomator-keepalive",
+    "name": "Cryptomator Keep-Alive",
+    "description": "Periodically reads a file to reset Cryptomator's vault idle-lock timer while Obsidian is open, so the vault only locks after you actually stop using it.",
+    "version": "1.0.0",
+    "author": "Raul Paya"
+}

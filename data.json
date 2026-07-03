@@ -1,6 +1,8 @@
 {
   "enabledModules": {
     "font-colors": true,
-    "notion-like-icons": true
+    "notion-like-icons": true,
+    "cryptomator-keepalive": true,
+    "vault-size-bar": true
   }
 }
