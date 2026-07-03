@@ -1,7 +1,8 @@
-const { Modal, Plugin, Setting, MarkdownView, requestUrl } = require('obsidian');
+const { Modal, Plugin, Setting, MarkdownView, requestUrl, PluginSettingTab } = require('obsidian');
 
 const DEFAULT_SETTINGS = {
-    icons: {} 
+    icons: {},
+    iconsFolder: '' // Holds custom path if configured
 };
 
 const ICONS_FOLDER = "ZZ - Dependencies/notion-like-plugins/notion-like-icons"
@@ -90,7 +91,8 @@ module.exports = class NotionIconPlugin extends Plugin {
     }
 
     getIconFolderPath() { 
-        return ICONS_FOLDER; 
+        // Fall back to default if no custom setting path is specified
+        return this.settings.iconsFolder?.trim() || ICONS_FOLDER; 
     }
 
     async ensureIconFolder() {
@@ -746,4 +748,29 @@ class UniversalIconPickerModal extends Modal {
     }
 
     onClose() { this.contentEl.empty(); }
+}
+
+// --- CONFIGURATION HOOK IMPLEMENTATION ---
+class SubPluginSettingTab extends PluginSettingTab {
+    display() {
+        const { containerEl } = this;
+        containerEl.empty();
+
+        // Enforce Master Orchestrator layout rule for sub-settings headers
+        if (!containerEl.classList.contains('orchestrator-sub-settings')) {
+            containerEl.createEl('h2', { text: 'Notion-like Icons Configuration' });
+        }
+
+        new Setting(containerEl)
+            .setName('Icons Storage Folder')
+            .setDesc('Enter the custom vault path where icons should be stored. Leave empty to fallback to default path.')
+            .addText(text => text
+                .setPlaceholder(ICONS_FOLDER)
+                .setValue(this.plugin.settings.iconsFolder || '')
+                .onChange(async (value) => {
+                    this.plugin.settings.iconsFolder = value.trim();
+                    await this.plugin.saveSettings();
+                    await this.plugin.ensureIconFolder();
+                }));
+    }
 }

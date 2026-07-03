@@ -9,6 +9,8 @@ const MANIFEST_SUFFIX = '-manifest.json';
 module.exports = class MasterOrchestratorPlugin extends Plugin {
     async onload() {
         await this.loadSettings();
+        this.expandedSettings = {};
+
         this.addSettingTab(new OrchestratorSettingTab(this.app, this));
 
         this.activeInstances = {};
@@ -211,19 +213,22 @@ class OrchestratorSettingTab extends PluginSettingTab {
 
         discoveredKeys.forEach(id => {
             const config = this.plugin.discoveredPlugins[id];
+            const isModuleEnabled = this.plugin.settings.enabledModules[id] || false;
             
-            // 1. Create a layout container block for each module section
+            // 1. Module Card Container (Shared for main toggle, settings button, and parameters)
             const moduleSectionEl = containerEl.createDiv({ cls: `orchestrator-module-${id}` });
-            moduleSectionEl.style.borderBottom = "1px solid var(--background-modifier-border)";
-            moduleSectionEl.style.paddingBottom = "12px";
+            moduleSectionEl.style.border = "1px solid var(--background-modifier-border)";
+            moduleSectionEl.style.borderRadius = "8px";
+            moduleSectionEl.style.padding = "12px";
             moduleSectionEl.style.marginBottom = "12px";
+            moduleSectionEl.style.backgroundColor = "var(--background-primary-alt)";
 
-            // 2. Render the Enable/Disable master toggle switch
-            new Setting(moduleSectionEl)
+            // 2. Main Row (Sets up the Enable/Disable controls)
+            const mainRowSetting = new Setting(moduleSectionEl)
                 .setName(config.name)
                 .setDesc(config.desc)
                 .addToggle(toggle => toggle
-                    .setValue(this.plugin.settings.enabledModules[id] || false)
+                    .setValue(isModuleEnabled)
                     .onChange(async (value) => {
                         this.plugin.settings.enabledModules[id] = value;
                         await this.plugin.saveSettings();
@@ -234,26 +239,77 @@ class OrchestratorSettingTab extends PluginSettingTab {
                             this.plugin.stopModule(id);
                             this.plugin.unloadSubPluginStyles(id);
                             this.app.workspace.trigger('css-change');
+                            this.plugin.expandedSettings[id] = false;
                         }
-                        this.display(); // Redraw view dynamically to mount/unmount sub-settings
+                        this.display(); 
                     }));
 
-            // 3. THE UNIFIED HOOK PASTE LOCATION: Dynamic settings nested injection
-            const activeInstance = this.plugin.activeInstances[id];
-            if (this.plugin.settings.enabledModules[id] && activeInstance) {
-                if (typeof activeInstance.getSettingTab === 'function') {
-                    const settingTabInstance = activeInstance.getSettingTab();
-                    
-                    if (settingTabInstance) {
-                        const subSettingsContainer = moduleSectionEl.createDiv({ cls: 'orchestrator-sub-settings' });
-                        subSettingsContainer.style.marginLeft = "24px";
-                        subSettingsContainer.style.paddingLeft = "12px";
-                        subSettingsContainer.style.borderLeft = "2px solid var(--interactive-accent)";
+            // Remove native padding/borders inside this nested row container
+            mainRowSetting.settingEl.style.borderTop = "none";
+            mainRowSetting.settingEl.style.padding = "0";
 
+            // 3. MERGE LOGIC: Dynamic configuration injection
+            const activeInstance = this.plugin.activeInstances[id];
+            if (isModuleEnabled && activeInstance && typeof activeInstance.getSettingTab === 'function') {
+                const settingTabInstance = activeInstance.getSettingTab();
+                
+                if (settingTabInstance) {
+                    const showSettingsActive = this.plugin.expandedSettings[id] || false;
+                    
+                    // Locate the control block on the right-hand side of the row
+                    const controlEl = mainRowSetting.settingEl.querySelector('.setting-item-control');
+                    
+                    if (controlEl) {
+                        // Insert an Options Toggle Switch directly inside the primary control column row
+                        const textLabel = document.createElement('span');
+                        textLabel.innerText = "Options";
+                        textLabel.style.fontSize = "0.75em";
+                        textLabel.style.color = "var(--text-muted)";
+                        textLabel.style.marginRight = "6px";
+                        textLabel.style.marginLeft = "12px";
+                        
+                        const subToggleEl = document.createElement('input');
+                        subToggleEl.type = "checkbox";
+                        subToggleEl.checked = showSettingsActive;
+                        subToggleEl.className = "task-list-item-checkbox"; 
+                        subToggleEl.style.cursor = "pointer";
+                        subToggleEl.style.transform = "scale(0.9)";
+                        
+                        subToggleEl.addEventListener('change', (e) => {
+                            this.plugin.expandedSettings[id] = e.target.checked;
+                            this.display();
+                        });
+
+                        // Prepend the new toggle group layout next to the master enable toggle switch
+                        controlEl.insertBefore(subToggleEl, controlEl.firstChild);
+                        controlEl.insertBefore(textLabel, controlEl.firstChild);
+                    }
+
+                    // 4. Compact Options Panel Render Box (70% scale size rule)
+                    if (showSettingsActive) {
+                        const subSettingsContainer = moduleSectionEl.createDiv({ cls: 'orchestrator-sub-settings' });
+                        
+                        // Apply custom 70% font sizing and condensed spacing requirements
+                        subSettingsContainer.style.fontSize = "70%";
+                        subSettingsContainer.style.lineHeight = "1.3";
+                        subSettingsContainer.style.marginTop = "10px";
+                        subSettingsContainer.style.padding = "8px 12px";
+                        subSettingsContainer.style.borderRadius = "6px";
+                        subSettingsContainer.style.borderTop = "1px dashed var(--background-modifier-border)";
+                        
                         settingTabInstance.containerEl = subSettingsContainer;
                         
                         try {
                             settingTabInstance.display();
+                            
+                            // Adjust styling of internal child elements to fit comfortably at 70% scale
+                            subSettingsContainer.querySelectorAll('.setting-item').forEach(el => {
+                                el.style.padding = "4px 0";
+                                el.style.borderTop = "none";
+                            });
+                            subSettingsContainer.querySelectorAll('.setting-item-description').forEach(el => {
+                                el.style.fontSize = "0.95em";
+                            });
                         } catch (err) {
                             console.error(`Failed to execute UI render for module [${id}]:`, err);
                         }
