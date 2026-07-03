@@ -18,8 +18,6 @@ module.exports = class MasterOrchestratorPlugin extends Plugin {
 
         const adapter = this.app.vault.adapter;
         const vaultPath = adapter.getBasePath();
-        // Sub-plugins now live flat, right alongside this plugin's own manifest.json/main.js —
-        // no "plugins-pool" subfolder. Any subfolder level was getting dropped by sync.
         this.poolDir = path.join(vaultPath, this.manifest.dir);
 
         this.discoverModules();
@@ -43,13 +41,6 @@ module.exports = class MasterOrchestratorPlugin extends Plugin {
         };
     }
 
-    // Sub-plugins now live as flat, prefixed files directly alongside this plugin's
-    // own manifest.json/main.js/data.json — no subfolder at all, e.g.:
-    //   font-colors-manifest.json
-    //   font-colors-main.js
-    //   font-colors-data.json   (optional)
-    //   font-colors-styles.css  (optional)
-    // This avoids any nested-folder level, since that was getting dropped by sync.
     discoverModules() {
         if (!fs.existsSync(this.poolDir)) {
             console.error(`[Master Orchestrator] Plugin folder not found: ${this.poolDir}`);
@@ -57,8 +48,6 @@ module.exports = class MasterOrchestratorPlugin extends Plugin {
         }
 
         const files = fs.readdirSync(this.poolDir);
-        // Exclude this plugin's own manifest.json (it doesn't have the "-manifest.json"
-        // suffix anyway, but this filter is explicit for clarity).
         const manifestFiles = files.filter(f => f.endsWith(MANIFEST_SUFFIX) && f !== 'manifest.json');
 
         manifestFiles.forEach(manifestFile => {
@@ -122,8 +111,6 @@ module.exports = class MasterOrchestratorPlugin extends Plugin {
                 throw new Error("No valid executable Plugin class found in module exports.");
             }
 
-            // dir now points at the orchestrator's own flat folder (shared by every
-            // sub-plugin), since standalone-folder support has been dropped.
             const subManifestContext = Object.assign({}, targetData.manifest, {
                 dir: this.poolDir
             });
@@ -132,10 +119,6 @@ module.exports = class MasterOrchestratorPlugin extends Plugin {
             instance.app = this.app;
             instance.manifest = subManifestContext;
 
-            // Obsidian's built-in Plugin.loadData()/saveData() always read/write a file
-            // literally named "data.json" inside manifest.dir. Since every sub-plugin now
-            // shares the same flat pool directory, that would collide across modules.
-            // Redirect them to this module's own prefixed data file instead.
             const dataPath = targetData.dataPath;
             instance.loadData = async () => {
                 if (!fs.existsSync(dataPath)) return null;
@@ -154,10 +137,7 @@ module.exports = class MasterOrchestratorPlugin extends Plugin {
                 }
             };
 
-            // FIX: addChild automatically calls instance.load() -> instance.onload() natively.
-            // We do not call instance.onload() manually here to prevent double event binding.
             this.addChild(instance);
-
             this.activeInstances[id] = instance;
             console.log(`[Master Orchestrator] Successfully executed module: ${id}`);
         } catch (e) {
@@ -171,7 +151,6 @@ module.exports = class MasterOrchestratorPlugin extends Plugin {
         const instance = this.activeInstances[id];
         if (instance) {
             try {
-                // removeChild automatically calls instance.unload() -> instance.onunload() internally
                 this.removeChild(instance);
             } catch (e) {
                 console.error(`Graceful unload failed for [${id}]:`, e);
@@ -218,6 +197,7 @@ module.exports = class MasterOrchestratorPlugin extends Plugin {
 
 class OrchestratorSettingTab extends PluginSettingTab {
     constructor(app, plugin) { super(app, plugin); this.plugin = plugin; }
+    
     display() {
         const { containerEl } = this;
         containerEl.empty();
@@ -231,7 +211,15 @@ class OrchestratorSettingTab extends PluginSettingTab {
 
         discoveredKeys.forEach(id => {
             const config = this.plugin.discoveredPlugins[id];
-            new Setting(containerEl)
+            
+            // 1. Create a layout container block for each module section
+            const moduleSectionEl = containerEl.createDiv({ cls: `orchestrator-module-${id}` });
+            moduleSectionEl.style.borderBottom = "1px solid var(--background-modifier-border)";
+            moduleSectionEl.style.paddingBottom = "12px";
+            moduleSectionEl.style.marginBottom = "12px";
+
+            // 2. Render the Enable/Disable master toggle switch
+            new Setting(moduleSectionEl)
                 .setName(config.name)
                 .setDesc(config.desc)
                 .addToggle(toggle => toggle
@@ -241,13 +229,37 @@ class OrchestratorSettingTab extends PluginSettingTab {
                         await this.plugin.saveSettings();
                         if (value) {
                             this.plugin.loadSubPluginStyles(id);
-                            this.plugin.startModule(id);
+                            await this.plugin.startModule(id);
                         } else {
                             this.plugin.stopModule(id);
                             this.plugin.unloadSubPluginStyles(id);
                             this.app.workspace.trigger('css-change');
                         }
+                        this.display(); // Redraw view dynamically to mount/unmount sub-settings
                     }));
+
+            // 3. THE UNIFIED HOOK PASTE LOCATION: Dynamic settings nested injection
+            const activeInstance = this.plugin.activeInstances[id];
+            if (this.plugin.settings.enabledModules[id] && activeInstance) {
+                if (typeof activeInstance.getSettingTab === 'function') {
+                    const settingTabInstance = activeInstance.getSettingTab();
+                    
+                    if (settingTabInstance) {
+                        const subSettingsContainer = moduleSectionEl.createDiv({ cls: 'orchestrator-sub-settings' });
+                        subSettingsContainer.style.marginLeft = "24px";
+                        subSettingsContainer.style.paddingLeft = "12px";
+                        subSettingsContainer.style.borderLeft = "2px solid var(--interactive-accent)";
+
+                        settingTabInstance.containerEl = subSettingsContainer;
+                        
+                        try {
+                            settingTabInstance.display();
+                        } catch (err) {
+                            console.error(`Failed to execute UI render for module [${id}]:`, err);
+                        }
+                    }
+                }
+            }
         });
     }
 }

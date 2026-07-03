@@ -15,7 +15,7 @@ since we no longer need each sub-plugin's `manifest.json` to be a fully
 valid, standalone-loadable Obsidian manifest.
 
 The fix: every sub-plugin now ships as a flat set of prefixed files sitting
-directly in the **same folder as the orchestrator's own `main.js`** — no
+directly in the **same folder as the orchestrator's own `main.js**` — no
 `plugins-pool/` subfolder at all, no subfolder of any kind. Everything the
 orchestrator manages lives at exactly one folder depth under
 `.obsidian/plugins/`, the same depth as any normal Obsidian plugin.
@@ -33,6 +33,7 @@ orchestrator manages lives at exactly one folder depth under
 ├── notion-like-icons-main.js
 ├── notion-like-icons-data.json
 └── notion-like-icons-styles.css
+
 ```
 
 Every sub-plugin file sits right alongside the orchestrator's own files —
@@ -44,12 +45,12 @@ step, since it's identical to how any single, ordinary plugin folder looks.
 For a sub-plugin with id `<id>` (e.g. `font-colors`), files sitting
 alongside the orchestrator's own `main.js` are:
 
-| File                    | Required? | Purpose                                             |
-|--------------------------|-----------|------------------------------------------------------|
-| `<id>-manifest.json`     | Yes       | Metadata: `id`, `name`, `description` (shown in the orchestrator's settings tab) |
-| `<id>-main.js`           | Yes       | The sub-plugin's code, exporting a `Plugin` subclass |
-| `<id>-data.json`         | No        | Persisted settings/state for that sub-plugin         |
-| `<id>-styles.css`        | No        | CSS injected into the document head while the module is enabled |
+| File | Required? | Purpose |
+| --- | --- | --- |
+| `<id>-manifest.json` | Yes | Metadata: `id`, `name`, `description` (shown in the orchestrator's settings tab) |
+| `<id>-main.js` | Yes | The sub-plugin's code, exporting a `Plugin` subclass |
+| `<id>-data.json` | No | Persisted settings/state for that sub-plugin |
+| `<id>-styles.css` | No | CSS injected into the document head while the module is enabled |
 
 The orchestrator discovers sub-plugins by scanning its own plugin folder for
 any file ending in `-manifest.json` (its own plain `manifest.json` is
@@ -70,14 +71,15 @@ Only these are read by the orchestrator:
     "version": "1.0.0",
     "author": "Raul Paya"
 }
+
 ```
 
-- `id` — if present, used as the module's key (falls back to the filename
-  prefix if omitted).
-- `name` / `description` — shown as the toggle's label/description in the
-  orchestrator's settings tab.
-- `version` / `author` — not read programmatically, but worth keeping for
-  your own records.
+* `id` — if present, used as the module's key (falls back to the filename
+prefix if omitted).
+* `name` / `description` — shown as the toggle's label/description in the
+orchestrator's settings tab.
+* `version` / `author` — not read programmatically, but worth keeping for
+your own records.
 
 Since sub-plugins no longer run standalone, `minAppVersion` and
 `isDesktopOnly` are no longer meaningful and can be omitted from new
@@ -101,6 +103,7 @@ module.exports = class MyModulePlugin extends Plugin {
         // calling this automatically, so you don't need to call it yourself.
     }
 }
+
 ```
 
 `require('obsidian')` works as normal inside these files — the orchestrator
@@ -113,13 +116,14 @@ You can use these exactly as in a normal Obsidian plugin:
 
 ```js
 async onload() {
-    const saved = await this.loadData(); // reads <id>-data.json
+    this.settings = Object.assign({}, DEFAULTS, await this.loadData()); // reads <id>-data.json
     ...
 }
 
 async someHandler() {
     await this.saveData({ ... }); // writes <id>-data.json
 }
+
 ```
 
 Under the hood, the orchestrator overrides these two methods per-instance
@@ -136,86 +140,85 @@ Optional. If present, its contents get injected into a `<style>` tag in
 action needed in `main.js` — just ship the CSS file with the matching
 prefix.
 
+---
+
+## The Dynamic Configuration Interface (`getSettingTab`)
+
+To eliminate hardcoded menu sidebars or dynamic check exceptions inside the orchestrator engine, **every single sub-plugin must include the exact same configuration hook signature.**
+
+Instead of registering configuration layouts globally with `this.addSettingTab()`, modules utilize JavaScript scope runtime checking to dynamically expose option elements to the master UI panel.
+
+### 1. Copy-Paste Code Contract
+
+Every single `<id>-main.js` file must include this exact function signature without modifications:
+
+```js
+    // THE EXACT SAME IDENTICAL FUNCTION IN EVERY PLUGIN:
+    getSettingTab() {
+        if (typeof SubPluginSettingTab !== 'undefined') {
+            return new SubPluginSettingTab(this.app, this);
+        }
+        return null;
+    }
+
+```
+
+### 2. Implementation Rules
+
+* **If the Plugin Has Settings:** Declare a class explicitly named `SubPluginSettingTab` at the bottom of the file. The function automatically registers its presence via `typeof` and returns the setup panel interface.
+* **If the Plugin Does NOT Have Settings:** Omit the `SubPluginSettingTab` class altogether. The `typeof` script safely evaluates to `"undefined"`, automatically returning `null` with no runtime errors.
+
+### 3. Nested Header Visibility Rule
+
+When implementing `SubPluginSettingTab` options, you must ensure headers do not disrupt the master list hierarchy. Wrap configuration titles using an orchestrator class check:
+
+```js
+class SubPluginSettingTab extends PluginSettingTab {
+    display() {
+        const { containerEl } = this;
+        containerEl.empty();
+
+        // Avoid adding giant headers when running nested inside the Orchestrator layout
+        if (!containerEl.classList.contains('orchestrator-sub-settings')) {
+            containerEl.createEl('h2', { text: 'Your Module Configuration' });
+        }
+
+        // Add standard Obsidian Setting layout rules here...
+    }
+}
+
+```
+
+---
+
 ## Enabling/disabling
 
-Nothing changes here — the orchestrator's settings tab still lists every
-discovered module by its `name`/`description` with a toggle, backed by
-`enabledModules[id]` in the orchestrator's own `data.json`. Toggling calls
-`startModule`/`stopModule` exactly as before.
+The orchestrator's settings tab lists every discovered module by its `name`/`description` with a toggle, backed by `enabledModules[id]` in the orchestrator's own `data.json`. Toggling calls `startModule`/`stopModule` exactly as before, dynamically mounting or unmounting the respective configuration layouts.
 
 ## Adding a new sub-plugin — checklist
 
 1. Pick an `id` (kebab-case, e.g. `table-formatter`).
-2. Write `table-formatter-manifest.json` (in the orchestrator's own plugin
-   folder) with at least `id`, `name`, `description`.
-3. Write `table-formatter-main.js` exporting a `Plugin` subclass, in the
-   same folder.
-4. (Optional) Add `table-formatter-data.json` if you need persisted state —
-   can start as `{}`.
-5. (Optional) Add `table-formatter-styles.css`.
-6. Reload the orchestrator (or restart Obsidian) — it'll show up in the
-   settings tab automatically, ready to toggle on.
+2. Write `table-formatter-manifest.json` (in the orchestrator's own plugin folder) with at least `id`, `name`, `description`.
+3. Write `table-formatter-main.js` exporting a `Plugin` subclass, in the same folder.
+4. Paste the unified `getSettingTab()` method block directly into the plugin class body.
+5. (Optional) If configurations are necessary, append `class SubPluginSettingTab extends PluginSettingTab` to the file footer.
+6. (Optional) Add `table-formatter-data.json` if you need persisted state — can start as `{}`.
+7. (Optional) Add `table-formatter-styles.css`.
+8. Reload the orchestrator (or restart Obsidian) — it'll show up in the settings tab automatically with inline layout support.
 
-No subfolders, ever — everything for a given module lives flat, right next
-to the orchestrator's own `main.js`, under its own prefix.
-
+No subfolders, ever — everything for a given module lives flat, right next to the orchestrator's own `main.js`, under its own prefix.
 
 ## Orchestrator internals — exact contract
 
-These are the specific behaviors your `<id>-main.js` can rely on, without
-needing the orchestrator's source pasted:
+These are the specific behaviors your `<id>-main.js` can rely on, without needing the orchestrator's source pasted:
 
-- **Discovery.** On load, the orchestrator scans its own plugin folder (not
-  a subfolder) for files ending in `-manifest.json`, excluding its own
-  literal `manifest.json`. For each match it derives `id` from the filename
-  prefix, then looks for `<id>-main.js` in the same folder. If that's
-  missing, the module is skipped with a console warning — discovery of
-  other modules is unaffected.
+* **Discovery.** On load, the orchestrator scans its own plugin folder (not a subfolder) for files ending in `-manifest.json`, excluding its own literal `manifest.json`. For each match it derives `id` from the filename prefix, then looks for `<id>-main.js` in the same folder. If that's missing, the module is skipped with a console warning — discovery of other modules is unaffected.
+* **Loading.** Your `<id>-main.js` is read as raw text and wrapped in a `(function(exports, require, module, __filename, __dirname) {...})` closure, then `window.eval`'d and invoked — it is **not** loaded via Node's `require`. `require('obsidian')` still works inside it: the orchestrator patches `Module._load`/`Module._resolveFilename` globally so that request resolves correctly regardless.
+* **Instantiation.** Your exported class (default export, or `.default`) is instantiated as `new YourClass(app, manifestContext)`, where `manifestContext` is your parsed `<id>-manifest.json` plus a `dir` field overridden to the orchestrator's own plugin folder path (shared by every module — do not assume it's unique to you).
+* **Lifecycle.** The orchestrator calls `this.addChild(instance)` — it does **not** call `onload()` directly (addChild does that). Disabling calls `this.removeChild(instance)`, which triggers `onunload()` the same way. Don't call your own `onload`/`onunload` manually.
+* **Dynamic Injector Setup.** When the Master panel renders settings, it maps the sub-plugin instance context directly. If `instance.getSettingTab()` yields a layout tab object, the orchestrator overrides `settingTabInstance.containerEl` onto a nested visual element (`div.orchestrator-sub-settings`) before calling `.display()`.
+* **`loadData()` / `saveData()` override.** Immediately after instantiation, the orchestrator monkey-patches `instance.loadData` and `instance.saveData` to read/write `<id>-data.json` in its own folder (JSON, pretty-printed on save) instead of Obsidian's default per-folder `data.json`. This is because every sub-plugin shares one folder with the orchestrator, so a literal `data.json` would collide. `loadData()` returns `null` if the file doesn't exist yet (not `{}`) — handle that in your own default-merging logic, e.g. `Object.assign({}, DEFAULTS, await this.loadData())`.
+* **Styles.** If `<id>-styles.css` exists, its raw contents are injected verbatim into a `<style id="master-toolkit-style-<id>">` tag in `<head>` when the module is enabled, and that tag is removed on disable. This happens independently of your `onload`/`onunload` — you don't need to manage it yourself.
+* **Failure handling.** If instantiation throws (bad export shape, error in `onload`, etc.), the orchestrator catches it, force-disables that module in its settings, and logs the error — it won't crash the orchestrator or block other modules from loading.
 
-- **Loading.** Your `<id>-main.js` is read as raw text and wrapped in a
-  `(function(exports, require, module, __filename, __dirname) {...})`
-  closure, then `window.eval`'d and invoked — it is **not** loaded via
-  Node's `require`. `require('obsidian')` still works inside it: the
-  orchestrator patches `Module._load`/`Module._resolveFilename` globally so
-  that request resolves correctly regardless.
-
-- **Instantiation.** Your exported class (default export, or `.default`) is
-  instantiated as `new YourClass(app, manifestContext)`, where
-  `manifestContext` is your parsed `<id>-manifest.json` plus a `dir` field
-  overridden to the orchestrator's own plugin folder path (shared by every
-  module — do not assume it's unique to you).
-
-- **Lifecycle.** The orchestrator calls `this.addChild(instance)` — it does
-  **not** call `onload()` directly (addChild does that). Disabling calls
-  `this.removeChild(instance)`, which triggers `onunload()` the same way.
-  Don't call your own `onload`/`onunload` manually.
-
-- **`loadData()` / `saveData()` override.** Immediately after instantiation,
-  the orchestrator monkey-patches `instance.loadData` and `instance.saveData`
-  to read/write `<id>-data.json` in its own folder (JSON, pretty-printed on
-  save) instead of Obsidian's default per-folder `data.json`. This is
-  because every sub-plugin shares one folder with the orchestrator, so a
-  literal `data.json` would collide. `loadData()` returns `null` if the file
-  doesn't exist yet (not `{}`) — handle that in your own default-merging
-  logic, e.g. `Object.assign({}, DEFAULTS, await this.loadData())`.
-
-- **Styles.** If `<id>-styles.css` exists, its raw contents are injected
-  verbatim into a `<style id="master-toolkit-style-<id>">` tag in `<head>`
-  when the module is enabled, and that tag is removed on disable. This
-  happens independently of your `onload`/`onunload` — you don't need to
-  manage it yourself.
-
-- **Toggle UI.** The settings tab lists every discovered module using
-  `manifest.name` / `manifest.description` as the toggle's label/desc, keyed
-  by `id` in the orchestrator's own `enabledModules` setting. No action
-  needed on your side beyond providing accurate `name`/`description` in
-  your manifest.
-
-- **Failure handling.** If instantiation throws (bad export shape, error in
-  `onload`, etc.), the orchestrator catches it, force-disables that module
-  in its settings, and logs the error — it won't crash the orchestrator or
-  block other modules from loading.
-
-If any of the above ever changes in `main.js`, this section needs to be
-updated to match — it's describing exact current behavior, not a stable
-public API.
+If any of the above ever changes in `main.js`, this section needs to be updated to match — it's describing exact current behavior, not a stable public API.

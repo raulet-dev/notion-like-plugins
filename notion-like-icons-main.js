@@ -1,11 +1,10 @@
 const { Modal, Plugin, Setting, MarkdownView, requestUrl } = require('obsidian');
 
 const DEFAULT_SETTINGS = {
-    icons: {} // Maps "iconName" -> "filename.png"
+    icons: {} 
 };
 
 const ICONS_FOLDER = "ZZ - Dependencies/notion-like-plugins/notion-like-icons"
-
 const ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif', 'image/svg+xml'];
 
 module.exports = class NotionIconPlugin extends Plugin {
@@ -13,17 +12,14 @@ module.exports = class NotionIconPlugin extends Plugin {
         await this.loadSettings();
         await this.ensureIconFolder();
         
-        // Runtime in-memory cache for folder icons to keep sidebar rendering blazing fast
         this.folderIconsCache = {}; 
         await this.scanVaultForFolderIcons();
         await this.generateDynamicCssSnippet(); 
 
-        // Ribbon Icon Launcher
         this.addRibbonIcon('image-plus', 'Notion-like Icon Manager', () => {
             new CentralIconLibraryModal(this.app, this).open();
         });
 
-        // Command Palette Hooks
         this.addCommand({
             id: 'open-icon-manager',
             name: 'Open Global Icon Library Manager',
@@ -45,7 +41,6 @@ module.exports = class NotionIconPlugin extends Plugin {
             }
         });
 
-        // Right-Click Folder Context Menu Hook
         this.registerEvent(
             this.app.workspace.on('file-menu', (menu, abstractFile) => {
                 if (abstractFile.children) {
@@ -60,7 +55,6 @@ module.exports = class NotionIconPlugin extends Plugin {
             })
         );
 
-        // Dynamic Layout Observer
         this.observer = new MutationObserver((mutations) => {
             for (let mutation of mutations) {
                 for (let node of mutation.addedNodes) {
@@ -83,11 +77,18 @@ module.exports = class NotionIconPlugin extends Plugin {
         });
     }
 
+    // THE EXACT SAME IDENTICAL FUNCTION IN EVERY PLUGIN:
+    getSettingTab() {
+        if (typeof SubPluginSettingTab !== 'undefined') {
+            return new SubPluginSettingTab(this.app, this);
+        }
+        return null;
+    }
+
     onunload() {
         if (this.observer) this.observer.disconnect();
     }
 
-    // CONSTANT PATH: Always points exactly to your vault root directory
     getIconFolderPath() { 
         return ICONS_FOLDER; 
     }
@@ -112,8 +113,6 @@ module.exports = class NotionIconPlugin extends Plugin {
 
     async scanFolderRecursive(folderPath) {
         const list = await this.app.vault.adapter.list(folderPath);
-        
-        // Skip scanning our own icon storage directory to save cycles
         if (folderPath === this.getIconFolderPath()) return;
 
         const configFilePath = folderPath ? `${folderPath}/.folder-icon.json` : '.folder-icon.json';
@@ -632,7 +631,7 @@ class UniversalIconPickerModal extends Modal {
     constructor(app, plugin, context) {
         super(app);
         this.plugin = plugin;
-        this.context = context; // Context: { type: 'note' | 'folder', target: TFile | TFolder }
+        this.context = context; 
         this.shouldClearIcon = false;
 
         if (this.context.type === 'folder') {

@@ -2,12 +2,7 @@ const { Plugin, PluginSettingTab, Setting } = require('obsidian');
 
 const DEFAULTS = {
     intervalSeconds: 60,
-    // 'write'       -> overwrite the heartbeat file with fresh content each tick
-    // 'write-delete'-> write it, then immediately delete it (create+delete cycle)
     mode: 'write',
-    // If left empty, uses a hidden heartbeat file inside this module's own
-    // plugin folder (so it never shows up in the note explorer or sync diffs
-    // as a "note").
     filePath: ''
 };
 
@@ -24,7 +19,15 @@ module.exports = class CryptomatorKeepAlivePlugin extends Plugin {
             callback: () => this.tick()
         });
 
-        this.addSettingTab(new CryptomatorKeepAliveSettingTab(this.app, this));
+        // NATIVE REGISTRATION BYPASSED TO RESPECT INTERFACE EXTRACTION
+    }
+
+    // THE EXACT SAME IDENTICAL FUNCTION IN EVERY PLUGIN:
+    getSettingTab() {
+        if (typeof SubPluginSettingTab !== 'undefined') {
+            return new SubPluginSettingTab(this.app, this);
+        }
+        return null;
     }
 
     onunload() {
@@ -47,17 +50,12 @@ module.exports = class CryptomatorKeepAlivePlugin extends Plugin {
     getTargetPath() {
         const custom = (this.settings.filePath || '').trim();
         if (custom.length > 0) return custom;
-        // return `${this.manifest.dir}/cryptomator-keepalive-heartbeat.tmp`;
         return `cryptomator-keepalive-heartbeat.tmp`;
     }
 
     async tick() {
         const path = this.getTargetPath();
         try {
-            // Write fresh content every time -- a write always has to reach
-            // the underlying encrypted volume, unlike a read, which can be
-            // served from cache (and won't touch atime on filesystems
-            // mounted with noatime, which is common).
             await this.app.vault.adapter.write(path, `keepalive:${Date.now()}`);
 
             if (this.settings.mode === 'write-delete') {
@@ -73,7 +71,8 @@ module.exports = class CryptomatorKeepAlivePlugin extends Plugin {
     }
 };
 
-class CryptomatorKeepAliveSettingTab extends PluginSettingTab {
+// Class name standardized to comply with orchestrator scanning rules
+class SubPluginSettingTab extends PluginSettingTab {
     constructor(app, plugin) {
         super(app, plugin);
         this.plugin = plugin;
@@ -83,7 +82,9 @@ class CryptomatorKeepAliveSettingTab extends PluginSettingTab {
         const { containerEl } = this;
         containerEl.empty();
 
-        containerEl.createEl('h2', { text: 'Cryptomator Keep-Alive' });
+        if (!containerEl.classList.contains('orchestrator-sub-settings')) {
+            containerEl.createEl('h2', { text: 'Cryptomator Keep-Alive' });
+        }
 
         new Setting(containerEl)
             .setName('Interval (seconds)')

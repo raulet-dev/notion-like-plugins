@@ -16,7 +16,15 @@ module.exports = class VaultSizeBarPlugin extends Plugin {
             this.registerSizeEvents();
         });
 
-        this.addSettingTab(new VaultSizeBarSettingTab(this.app, this));
+        // REMOVE OR BYPASS NATIVE MOUNT RULE TO COMPLY WITH STRATEGY CONTRACT
+    }
+
+    // THE EXACT SAME IDENTICAL FUNCTION IN EVERY PLUGIN:
+    getSettingTab() {
+        if (typeof SubPluginSettingTab !== 'undefined') {
+            return new SubPluginSettingTab(this.app, this);
+        }
+        return null;
     }
 
     onunload() {
@@ -112,7 +120,6 @@ module.exports = class VaultSizeBarPlugin extends Plugin {
     async updateBar() {
         if (!this.statusBarEl) return;
 
-        // --- Left Side ---
         let selectedSizeText = "Selected: 0 B";
         if (this.lastClickedPath) {
             const targetItem = this.app.vault.getAbstractFileByPath(this.lastClickedPath);
@@ -127,10 +134,8 @@ module.exports = class VaultSizeBarPlugin extends Plugin {
                 selectedSizeText = `Selected: ${this.formatBytes(sizeBytes)}`;
             }
         }
-        // Force a non-breaking space padding character on the left side
         this.leftSlot.innerHTML = `&nbsp;${selectedSizeText}`;
 
-        // --- Right Side ---
         const totalBytes = await this.calculateVaultTotalSize();
         let rightText = `Total: ${this.formatBytes(totalBytes)}`;
 
@@ -167,7 +172,6 @@ module.exports = class VaultSizeBarPlugin extends Plugin {
             rightText += ` / ${this.formatBytes(limitBytes)}`;
         }
 
-        // Force a non-breaking space padding character on the right side
         this.rightSlot.innerHTML = `${rightText}&nbsp;`;
     }
 
@@ -213,7 +217,8 @@ module.exports = class VaultSizeBarPlugin extends Plugin {
     }
 };
 
-class VaultSizeBarSettingTab extends PluginSettingTab {
+// Class name standardized to comply with orchestrator scanning rules
+class SubPluginSettingTab extends PluginSettingTab {
     constructor(app, plugin) {
         super(app, plugin);
         this.plugin = plugin;
@@ -223,8 +228,11 @@ class VaultSizeBarSettingTab extends PluginSettingTab {
         const { containerEl } = this;
         containerEl.empty();
 
-        containerEl.createEl('h2', { text: 'Vault Size Bar Configuration' });
-
+        // Nesting title check
+        if (!containerEl.classList.contains('orchestrator-sub-settings')) {
+            containerEl.createEl('h2', { text: 'Vault Size Bar Configuration' });
+        }
+        
         new Setting(containerEl)
             .setName('Font Size (px)')
             .setDesc('Adjust the size of the text displayed inside the size bar layer at the bottom of the navigation explorer.')

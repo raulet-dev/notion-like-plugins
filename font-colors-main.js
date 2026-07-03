@@ -103,6 +103,14 @@ module.exports = class NotionColorMenuPlugin extends Plugin {
         );
     }
 
+    // THE EXACT SAME IDENTICAL FUNCTION IN EVERY PLUGIN:
+    getSettingTab() {
+        if (typeof SubPluginSettingTab !== 'undefined') {
+            return new SubPluginSettingTab(this.app, this);
+        }
+        return null;
+    }
+
     detectAndExpandSpanSelection(editor) {
         let from = editor.getCursor("from");
         let to = editor.getCursor("to");
