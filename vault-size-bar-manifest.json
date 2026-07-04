@@ -1,7 +1,0 @@
-{
-    "id": "vault-size-bar",
-    "name": "Vault Size Bar",
-    "description": "Displays selected item size and total vault/sync size at the bottom of the file explorer.",
-    "version": "1.0.0",
-    "author": "Raul Paya"
-}

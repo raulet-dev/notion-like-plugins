@@ -1,0 +1,15 @@
+{
+  "name": "notion-like-plugins",
+  "version": "1.0.1",
+  "description": "Cross-platform bundled plugin sandbox suite",
+  "main": "main.js",
+  "scripts": {
+    "dev": "esbuild src/main.ts --bundle --outfile=main.js --watch --external:obsidian --format=cjs",
+    "build": "esbuild src/main.ts --bundle --outfile=main.js --minify --external:obsidian --format=cjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.21.0",
+    "obsidian": "^1.5.0",
+    "typescript": "^5.0.0"
+  }
+}

@@ -1,9 +1,0 @@
-{
-    "id": "font-colors",
-    "name": "Font Colors",
-    "version": "1.0.0",
-    "minAppVersion": "0.15.0",
-    "description": "Adds customizable font colors to text.",
-    "author": "Raul Paya",
-    "isDesktopOnly": false
-}
