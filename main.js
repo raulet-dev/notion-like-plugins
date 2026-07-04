@@ -106,6 +106,12 @@ var CryptomatorKeepAliveModule = class extends import_obsidian.Component {
         await this.pluginInstance.saveSettings();
       })
     );
+    new import_obsidian.Setting(containerEl).setName("Heartbeat file path (optional)").setDesc('Vault-relative path, e.g. ".obsidian/keep-alive.tmp". Leave blank to use a default file name at your vault root.').addText(
+      (text) => text.setPlaceholder(".obsidian/keep-alive.tmp").setValue(this.settings.filePath || "").onChange(async (value) => {
+        this.settings.filePath = value.trim();
+        await this.pluginInstance.saveSettings();
+      })
+    );
   }
 };
 

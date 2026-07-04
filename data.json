@@ -8,9 +8,9 @@
   },
   "expandedSettings": {
     "cryptomator-keep-alive": true,
-    "font-colors": true,
-    "notion-like-icons": true,
-    "vault-size-bar": true
+    "font-colors": false,
+    "notion-like-icons": false,
+    "vault-size-bar": false
   },
   "modulesData": {
     "cryptomator-keep-alive": {
