@@ -2,21 +2,22 @@
   "enabledModules": {
     "font-colors": true,
     "notion-like-icons": true,
-    "cryptomator-keepalive": true,
     "vault-size-bar": true,
-    "cryptomator-keep-alive": true
+    "cryptomator-keep-alive": true,
+    "bases-kanban": true
   },
   "expandedSettings": {
-    "cryptomator-keep-alive": true,
+    "cryptomator-keep-alive": false,
     "font-colors": false,
     "notion-like-icons": false,
-    "vault-size-bar": false
+    "vault-size-bar": false,
+    "bases-kanban": false
   },
   "modulesData": {
     "cryptomator-keep-alive": {
       "intervalSeconds": 28,
       "mode": "write-delete",
-      "filePath": "ZZ - Dependencies/notion-like-plugins/keep-alive.tmp"
+      "filePath": ".obsidian/keep-alive.tmp"
     },
     "font-colors": {
       "textColors": [
@@ -98,7 +99,8 @@
     },
     "notion-like-icons": {
       "icons": {
-        "phx_dark": "phx_dark.png"
+        "phx_dark": "phx_dark.png",
+        "rauletdev_logo": "logov2nobrd500px.png"
       },
       "iconsFolder": "ZZ - Dependencies/notion-like-plugins/notion-like-icons"
     },

@@ -22,7 +22,7 @@ __export(main_exports, {
   default: () => MasterOrchestratorPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian5 = require("obsidian");
+var import_obsidian6 = require("obsidian");
 
 // src/modules/cryptomator-keep-alive.ts
 var import_obsidian = require("obsidian");
@@ -1003,12 +1003,168 @@ var VaultSizeBarModule = class extends import_obsidian4.Component {
   }
 };
 
+// src/modules/bases-kanban.ts
+var import_obsidian5 = require("obsidian");
+var ExampleViewType = "kanban";
+var BASES_KANBAN_DEFAULTS = {};
+var BasesKanbanModule = class extends import_obsidian5.Component {
+  app;
+  manifest;
+  pluginInstance;
+  moduleId;
+  constructor(app, manifest, pluginInstance, moduleId) {
+    super();
+    this.app = app;
+    this.manifest = manifest;
+    this.pluginInstance = pluginInstance;
+    this.moduleId = moduleId;
+  }
+  async onload() {
+    this.registerBasesKanbanLayout();
+  }
+  registerBasesKanbanLayout() {
+    if (typeof this.pluginInstance.registerBasesView !== "function") {
+      return;
+    }
+    this.pluginInstance.registerBasesView(ExampleViewType, {
+      name: "Kanban",
+      icon: "lucide-kanban",
+      factory: (controller, containerEl) => {
+        return new MyBasesKanbanView(controller, containerEl);
+      },
+      options: () => [
+        {
+          type: "property",
+          displayName: "Group by property",
+          key: "groupByProperty",
+          placeholder: "Select target property..."
+        }
+      ]
+    });
+  }
+  renderSettings(containerEl) {
+    containerEl.createEl("p", {
+      text: "Configuration options are managed directly inside each individual view layout panel popover configurations menu.",
+      cls: "setting-item-description"
+    });
+  }
+};
+var MyBasesKanbanView = class extends import_obsidian5.BasesView {
+  type = ExampleViewType;
+  controller;
+  containerEl;
+  constructor(controller, containerEl) {
+    super(controller);
+    this.controller = controller;
+    this.containerEl = containerEl;
+  }
+  onDataUpdated() {
+    this.containerEl.empty();
+    this.containerEl.addClass("bases-kanban-view-wrapper");
+    const targetProperty = this.config?.get("groupByProperty") || "note.status";
+    const entries = this.data?.data || [];
+    const detectedValuesSet = /* @__PURE__ */ new Set();
+    entries.forEach((entry) => {
+      if (entry && typeof entry.getValue === "function") {
+        const valueWrapper = entry.getValue(targetProperty);
+        if (valueWrapper && typeof valueWrapper.toString === "function") {
+          const stringifiedValue = valueWrapper.toString().trim();
+          if (stringifiedValue !== "") {
+            detectedValuesSet.add(stringifiedValue);
+          }
+        }
+      }
+    });
+    let columnsList = Array.from(detectedValuesSet);
+    if (columnsList.includes("null")) {
+      columnsList = ["null", ...columnsList.filter((v) => v !== "null")];
+    }
+    const columnsWrapper = this.containerEl.createDiv({ cls: "kanban-columns-container" });
+    columnsWrapper.style.cssText = "display: flex; gap: 16px; overflow-x: auto; padding: 15px; align-items: flex-start; height: 100%; width: 100%; box-sizing: border-box;";
+    columnsList.forEach((columnValue) => {
+      const columnEl = columnsWrapper.createDiv({ cls: "kanban-column" });
+      columnEl.style.cssText = "flex: 0 0 280px; width: 280px; background: var(--background-primary-alt); border-radius: 8px; border: 1px solid var(--background-modifier-border); max-height: 100%; display: flex; flex-direction: column; padding: 12px; box-sizing: border-box;";
+      const displayTitle = columnValue === "null" ? "NULL / UNASSIGNED" : columnValue.toUpperCase();
+      const headerEl = columnEl.createEl("h3", { text: displayTitle, cls: "kanban-column-header" });
+      headerEl.style.cssText = "margin: 0 0 12px 0; font-size: 0.85rem; letter-spacing: 0.5px; font-weight: 600; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;";
+      const cardsContainer = columnEl.createDiv({ cls: "kanban-cards-container" });
+      cardsContainer.dataset.columnValue = columnValue;
+      cardsContainer.style.cssText = "display: flex; flex-direction: column; gap: 8px; overflow-y: auto; flex-grow: 1; min-height: 150px; padding-bottom: 20px;";
+      this.initializeDropZone(cardsContainer, targetProperty);
+      entries.forEach((entry) => {
+        const file = entry?.file;
+        if (file instanceof import_obsidian5.TFile) {
+          let currentStatus = "null";
+          if (entry && typeof entry.getValue === "function") {
+            const valueWrapper = entry.getValue(targetProperty);
+            if (valueWrapper && typeof valueWrapper.toString === "function") {
+              const stringifiedValue = valueWrapper.toString().trim();
+              if (stringifiedValue !== "") {
+                currentStatus = stringifiedValue;
+              }
+            }
+          }
+          if (currentStatus === columnValue) {
+            const cardEl = cardsContainer.createDiv({ cls: "kanban-card", text: file.basename });
+            cardEl.setAttribute("draggable", "true");
+            cardEl.style.cssText = "background: var(--background-primary); border: 1px solid var(--background-modifier-border); padding: 10px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); font-size: 0.9rem; color: var(--text-normal); cursor: grab; user-select: none; margin-bottom: 2px;";
+            cardEl.addEventListener("dblclick", async (e) => {
+              e.preventDefault();
+              const newLeaf = this.app.workspace.getLeaf("tab");
+              await newLeaf.openFile(file);
+            });
+            cardEl.addEventListener("dragstart", (e) => {
+              e.dataTransfer?.setData("text/plain", file.path);
+              cardEl.style.opacity = "0.4";
+            });
+            cardEl.addEventListener("dragend", () => {
+              cardEl.style.opacity = "1";
+            });
+          }
+        }
+      });
+    });
+  }
+  initializeDropZone(container, targetProperty) {
+    container.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      container.style.background = "var(--background-modifier-hover)";
+    });
+    container.style.transition = "background 0.15s ease";
+    container.addEventListener("dragleave", () => {
+      container.style.background = "transparent";
+    });
+    container.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      container.style.background = "transparent";
+      const filePath = e.dataTransfer?.getData("text/plain");
+      const destinationValue = container.dataset.columnValue;
+      if (!filePath || !destinationValue) return;
+      const cleanFrontmatterKey = targetProperty.replace(/^note\./, "");
+      const file = this.app.vault.getAbstractFileByPath(filePath);
+      if (file instanceof import_obsidian5.TFile) {
+        await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+          if (destinationValue === "null" || destinationValue === "Unassigned") {
+            delete frontmatter[cleanFrontmatterKey];
+          } else {
+            frontmatter[cleanFrontmatterKey] = destinationValue;
+          }
+        });
+        if (this.controller && typeof this.controller.refresh === "function") {
+          this.controller.refresh();
+        }
+      }
+    });
+  }
+};
+
 // src/modules.ts
 var autoModules = {
   "cryptomator-keep-alive": { classRef: CryptomatorKeepAliveModule, defaults: CRYPTOMATOR_KEEP_ALIVE_DEFAULTS },
   "font-colors": { classRef: FontColorsModule, defaults: FONT_COLORS_DEFAULTS },
   "notion-like-icons": { classRef: NotionIconsModule, defaults: NOTION_ICONS_DEFAULTS },
-  "vault-size-bar": { classRef: VaultSizeBarModule, defaults: VAULT_SIZE_BAR_DEFAULTS }
+  "vault-size-bar": { classRef: VaultSizeBarModule, defaults: VAULT_SIZE_BAR_DEFAULTS },
+  "bases-kanban": { classRef: BasesKanbanModule, defaults: BASES_KANBAN_DEFAULTS }
 };
 
 // src/main.ts
@@ -1017,7 +1173,7 @@ var DEFAULT_SETTINGS = {
   expandedSettings: {},
   modulesData: {}
 };
-var MasterOrchestratorPlugin = class extends import_obsidian5.Plugin {
+var MasterOrchestratorPlugin = class extends import_obsidian6.Plugin {
   activeInstances = {};
   async onload() {
     await this.loadSettings();
@@ -1065,7 +1221,7 @@ var MasterOrchestratorPlugin = class extends import_obsidian5.Plugin {
     Object.keys(this.activeInstances).forEach((id) => this.stopModule(id));
   }
 };
-var OrchestratorSettingTab = class extends import_obsidian5.PluginSettingTab {
+var OrchestratorSettingTab = class extends import_obsidian6.PluginSettingTab {
   plugin;
   constructor(app, plugin) {
     super(app, plugin);
@@ -1084,7 +1240,7 @@ var OrchestratorSettingTab = class extends import_obsidian5.PluginSettingTab {
       moduleSectionEl.style.padding = "12px";
       moduleSectionEl.style.marginBottom = "12px";
       moduleSectionEl.style.backgroundColor = "var(--background-primary-alt)";
-      const mainRowSetting = new import_obsidian5.Setting(moduleSectionEl).setName(displayTitle).setDesc(`Workspace component feature extension module [${id}].`).addToggle((toggle) => toggle.setValue(isModuleEnabled).onChange(async (value) => {
+      const mainRowSetting = new import_obsidian6.Setting(moduleSectionEl).setName(displayTitle).setDesc(`Workspace component feature extension module [${id}].`).addToggle((toggle) => toggle.setValue(isModuleEnabled).onChange(async (value) => {
         this.plugin.settings.enabledModules[id] = value;
         await this.plugin.saveSettings();
         if (value) {

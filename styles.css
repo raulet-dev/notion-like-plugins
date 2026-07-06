@@ -238,3 +238,64 @@
     display: flex; 
     align-items: center; 
 }
+
+/* ==========================================================================
+   MODULE STYLES: bases-kanban
+   ========================================================================== */
+.bases-kanban-view-wrapper {
+    display: flex;
+    gap: 1rem;
+    overflow-x: auto;
+    padding: 1rem;
+    height: 100%;
+    align-items: flex-start;
+}
+
+.kanban-column {
+    background: var(--background-secondary);
+    border-radius: 6px;
+    min-width: 260px;
+    max-width: 320px;
+    display: flex;
+    flex-direction: column;
+    max-height: 100%;
+    border: 1px solid var(--border-width) var(--border-color);
+}
+
+.kanban-column-header {
+    margin: 0;
+    padding: 0.75rem;
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+}
+
+.kanban-cards-container {
+    padding: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    overflow-y: auto;
+    min-height: 150px; /* Ensures drop targeting works when columns are empty */
+}
+
+.kanban-cards-container.drag-hover {
+    background: var(--background-modifier-hover);
+    border-radius: 4px;
+}
+
+.kanban-card {
+    background: var(--background-primary);
+    padding: 0.75rem;
+    border-radius: 4px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    cursor: grab;
+    border: 1px solid var(--border-color);
+    font-size: 0.95rem;
+}
+
+.kanban-card.is-dragging {
+    opacity: 0.4;
+    cursor: grabbing;
+}
