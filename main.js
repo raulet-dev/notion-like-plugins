@@ -1060,10 +1060,15 @@ var MyBasesKanbanView = class extends import_obsidian5.BasesView {
   }
   onDataUpdated() {
     this.containerEl.empty();
-    this.containerEl.addClass("bases-kanban-view-wrapper");
+    this.containerEl.removeClass("bases-kanban-view-wrapper");
+    this.containerEl.removeAttribute("style");
     const targetProperty = this.config?.get("groupByProperty") || "note.status";
     const entries = this.data?.data || [];
     const detectedValuesSet = /* @__PURE__ */ new Set();
+    const rawTitles = this.config?.get("columnTitles");
+    const rawColors = this.config?.get("columnColors");
+    const columnTitlesRegistry = rawTitles && typeof rawTitles === "object" ? { ...rawTitles } : {};
+    const columnColorsRegistry = rawColors && typeof rawColors === "object" ? { ...rawColors } : {};
     entries.forEach((entry) => {
       if (entry && typeof entry.getValue === "function") {
         const valueWrapper = entry.getValue(targetProperty);
@@ -1083,10 +1088,25 @@ var MyBasesKanbanView = class extends import_obsidian5.BasesView {
     columnsWrapper.style.cssText = "display: flex; gap: 16px; overflow-x: auto; padding: 15px; align-items: flex-start; height: 100%; width: 100%; box-sizing: border-box;";
     columnsList.forEach((columnValue) => {
       const columnEl = columnsWrapper.createDiv({ cls: "kanban-column" });
-      columnEl.style.cssText = "flex: 0 0 280px; width: 280px; background: var(--background-primary-alt); border-radius: 8px; border: 1px solid var(--background-modifier-border); max-height: 100%; display: flex; flex-direction: column; padding: 12px; box-sizing: border-box;";
-      const displayTitle = columnValue === "null" ? "NULL / UNASSIGNED" : columnValue.toUpperCase();
-      const headerEl = columnEl.createEl("h3", { text: displayTitle, cls: "kanban-column-header" });
-      headerEl.style.cssText = "margin: 0 0 12px 0; font-size: 0.85rem; letter-spacing: 0.5px; font-weight: 600; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;";
+      const savedTitle = columnTitlesRegistry[columnValue] || (columnValue === "null" ? "NULL / UNASSIGNED" : columnValue.toUpperCase());
+      const rawSavedColor = columnColorsRegistry[columnValue];
+      const hasCustomColor = rawSavedColor && rawSavedColor !== "automatic";
+      const backgroundStyle = hasCustomColor ? `background: ${rawSavedColor};` : "";
+      columnEl.style.cssText = `flex: 0 0 280px; width: 280px; ${backgroundStyle} border-radius: 8px; border: 1px solid var(--background-modifier-border); max-height: 100%; display: flex; flex-direction: column; padding: 12px; box-sizing: border-box; transition: background 0.2s ease;`;
+      if (!hasCustomColor) {
+        columnEl.style.backgroundColor = "var(--background-primary-alt)";
+      }
+      const headerOuterRow = columnEl.createDiv({ cls: "kanban-column-header-outer" });
+      headerOuterRow.style.cssText = "min-height: 32px; display: flex; align-items: center; margin-bottom: 12px; width: 100%; position: relative;";
+      const headerWrapper = headerOuterRow.createDiv({ cls: "kanban-column-header-wrapper" });
+      headerWrapper.style.cssText = "display: flex; justify-content: space-between; align-items: center; cursor: pointer; width: 100%;";
+      const headerEl = headerWrapper.createEl("h3", { text: savedTitle, cls: "kanban-column-header" });
+      headerEl.style.cssText = "margin: 0; font-size: 0.85rem; letter-spacing: 0.5px; font-weight: 600; color: var(--text-normal); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-grow: 1;";
+      headerWrapper.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.openHeaderEditor(headerOuterRow, headerWrapper, columnValue, columnTitlesRegistry, columnColorsRegistry, columnEl);
+      });
       const cardsContainer = columnEl.createDiv({ cls: "kanban-cards-container" });
       cardsContainer.dataset.columnValue = columnValue;
       cardsContainer.style.cssText = "display: flex; flex-direction: column; gap: 8px; overflow-y: auto; flex-grow: 1; min-height: 150px; padding-bottom: 20px;";
@@ -1108,13 +1128,14 @@ var MyBasesKanbanView = class extends import_obsidian5.BasesView {
             const cardEl = cardsContainer.createDiv({ cls: "kanban-card", text: file.basename });
             cardEl.setAttribute("draggable", "true");
             cardEl.style.cssText = "background: var(--background-primary); border: 1px solid var(--background-modifier-border); padding: 10px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); font-size: 0.9rem; color: var(--text-normal); cursor: grab; user-select: none; margin-bottom: 2px;";
-            cardEl.addEventListener("dblclick", async (e) => {
-              e.preventDefault();
+            cardEl.addEventListener("dblclick", async (ev) => {
+              ev.preventDefault();
               const newLeaf = this.app.workspace.getLeaf("tab");
               await newLeaf.openFile(file);
             });
-            cardEl.addEventListener("dragstart", (e) => {
-              e.dataTransfer?.setData("text/plain", file.path);
+            cardEl.setAttribute("draggable", "true");
+            cardEl.addEventListener("dragstart", (dragEv) => {
+              dragEv.dataTransfer?.setData("text/plain", file.path);
               cardEl.style.opacity = "0.4";
             });
             cardEl.addEventListener("dragend", () => {
@@ -1125,18 +1146,97 @@ var MyBasesKanbanView = class extends import_obsidian5.BasesView {
       });
     });
   }
+  openHeaderEditor(headerOuterRow, headerWrapper, columnValue, columnTitlesRegistry, columnColorsRegistry, columnEl) {
+    headerWrapper.style.display = "none";
+    let isResettingToAutomatic = false;
+    const editorBubble = headerOuterRow.createDiv({ cls: "kanban-header-editor-bubble" });
+    editorBubble.style.cssText = "display: flex; align-items: center; gap: 8px; background: var(--background-secondary); padding: 4px; border-radius: 6px; border: 1px solid var(--background-modifier-border); width: 100%; box-sizing: border-box;";
+    const renameInput = editorBubble.createDiv({ cls: "kanban-editor-input-wrap" }).createEl("input", { type: "text" });
+    renameInput.value = columnTitlesRegistry[columnValue] || (columnValue === "null" ? "NULL / UNASSIGNED" : columnValue.toUpperCase());
+    renameInput.style.cssText = "width: 100%; padding: 4px 6px; border-radius: 4px; background: var(--background-primary); color: var(--text-normal); border: 1px solid var(--background-modifier-border); font-size: 0.85rem; height: 26px;";
+    renameInput.parentElement.style.cssText = "flex-grow: 1; min-width: 0;";
+    renameInput.focus();
+    const colorPicker = editorBubble.createEl("input", { type: "color" });
+    let currentRawColor = columnColorsRegistry[columnValue] || "#1e1e1e";
+    if (currentRawColor.startsWith("var") || currentRawColor === "automatic") currentRawColor = "#2a2a2a";
+    colorPicker.value = currentRawColor;
+    colorPicker.style.cssText = "width: 24px; height: 24px; padding: 0; border: none; border-radius: 4px; cursor: pointer; background: transparent; flex-shrink: 0;";
+    colorPicker.addEventListener("input", () => {
+      isResettingToAutomatic = false;
+      columnEl.style.backgroundColor = colorPicker.value;
+    });
+    const resetBtn = editorBubble.createEl("button", { text: "\u21BA", title: "Reset to automatic color" });
+    resetBtn.style.cssText = "padding: 0; width: 24px; height: 24px; background: transparent; border: 1px solid var(--background-modifier-border); color: var(--text-muted); border-radius: 4px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; flex-shrink: 0; transition: color 0.15s ease;";
+    resetBtn.addEventListener("mouseenter", () => resetBtn.style.color = "var(--text-accent)");
+    resetBtn.addEventListener("mouseleave", () => resetBtn.style.color = "var(--text-muted)");
+    resetBtn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      isResettingToAutomatic = true;
+      columnEl.style.backgroundColor = "var(--background-primary-alt)";
+      const updatedColors = { ...columnColorsRegistry };
+      updatedColors[columnValue] = "automatic";
+      const updatedTitles = { ...columnTitlesRegistry };
+      const finalTitle = renameInput.value.trim();
+      if (finalTitle !== "") {
+        updatedTitles[columnValue] = finalTitle;
+      }
+      this.config?.set("columnTitles", updatedTitles);
+      this.config?.set("columnColors", updatedColors);
+      if (this.controller && typeof this.controller.save === "function") {
+        await this.controller.save();
+      }
+      editorBubble.remove();
+      headerWrapper.style.display = "flex";
+      this.onDataUpdated();
+    });
+    const saveChanges = async () => {
+      if (isResettingToAutomatic) return;
+      const finalTitle = renameInput.value.trim();
+      const updatedTitles = { ...columnTitlesRegistry };
+      if (finalTitle !== "") {
+        updatedTitles[columnValue] = finalTitle;
+      }
+      const updatedColors = { ...columnColorsRegistry };
+      if (columnColorsRegistry[columnValue] === "automatic") {
+        updatedColors[columnValue] = "automatic";
+      } else {
+        updatedColors[columnValue] = colorPicker.value;
+      }
+      this.config?.set("columnTitles", updatedTitles);
+      this.config?.set("columnColors", updatedColors);
+      if (this.controller && typeof this.controller.save === "function") {
+        await this.controller.save();
+      }
+      editorBubble.remove();
+      headerWrapper.style.display = "flex";
+      this.onDataUpdated();
+    };
+    renameInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") saveChanges();
+      if (e.key === "Escape") {
+        editorBubble.remove();
+        headerWrapper.style.display = "flex";
+        this.onDataUpdated();
+      }
+    });
+    colorPicker.addEventListener("change", saveChanges);
+    setTimeout(() => {
+      const closeListener = (ev) => {
+        if (!editorBubble.contains(ev.target)) {
+          saveChanges();
+          document.removeEventListener("mousedown", closeListener);
+        }
+      };
+      document.addEventListener("mousedown", closeListener);
+    }, 50);
+  }
   initializeDropZone(container, targetProperty) {
     container.addEventListener("dragover", (e) => {
       e.preventDefault();
-      container.style.background = "var(--background-modifier-hover)";
-    });
-    container.style.transition = "background 0.15s ease";
-    container.addEventListener("dragleave", () => {
-      container.style.background = "transparent";
     });
     container.addEventListener("drop", async (e) => {
       e.preventDefault();
-      container.style.background = "transparent";
       const filePath = e.dataTransfer?.getData("text/plain");
       const destinationValue = container.dataset.columnValue;
       if (!filePath || !destinationValue) return;
