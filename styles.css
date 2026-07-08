@@ -240,7 +240,7 @@
 }
 
 /* ==========================================================================
-   MODULE STYLES: bases-kanban
+   3. BASES KANBAN VIEW LAYOUT MODULE STYLES
    ========================================================================== */
 .bases-kanban-view-wrapper {
     display: flex;
@@ -277,7 +277,7 @@
     flex-direction: column;
     gap: 0.5rem;
     overflow-y: auto;
-    min-height: 150px; /* Ensures drop targeting works when columns are empty */
+    min-height: 150px;
 }
 
 .kanban-cards-container.drag-hover {
@@ -285,17 +285,84 @@
     border-radius: 4px;
 }
 
+/* Expanded layout framework to handle variable property item pill lists */
 .kanban-card {
     background: var(--background-primary);
-    padding: 0.75rem;
+    padding: 12px;
     border-radius: 4px;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
     cursor: grab;
     border: 1px solid var(--border-color);
     font-size: 0.95rem;
+    display: flex;
+    flex-direction: column;
+    gap: 8px !important;
 }
 
 .kanban-card.is-dragging {
     opacity: 0.4;
     cursor: grabbing;
+}
+
+/* Secondary meta properties row dividers inside expanded cards */
+.kanban-card-meta-field {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    border-top: 1px solid var(--background-modifier-border);
+    padding-top: 6px;
+    margin-top: 2px;
+}
+
+.kanban-card-meta-field span:first-child {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    font-weight: 600;
+}
+
+.kanban-card-meta-field span:last-child {
+    font-size: 0.8rem;
+    color: var(--text-normal);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ==========================================================================
+   4. BASES GRAPH MODULE STYLES (Dynamic Query Visualizations Engine)
+   ========================================================================== */
+.bases-graph-render-container {
+    background: #141414 !important;
+    padding: 24px;
+    border-radius: 12px;
+    margin: 18px 0;
+    border: 1px solid #222222;
+    width: 100%;
+    box-sizing: border-box;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-family: var(--font-interface), system-ui, -apple-system, sans-serif;
+}
+
+.bases-graph-render-container svg {
+    display: block;
+    width: 100%;
+    height: auto;
+}
+
+.bases-graph-render-container text {
+    user-select: none;
+}
+
+.graph-settings-preview-dot {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    margin-right: 12px;
+    border: 1px solid var(--background-modifier-border);
+    vertical-align: middle;
 }

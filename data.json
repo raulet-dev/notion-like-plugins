@@ -4,14 +4,16 @@
     "notion-like-icons": true,
     "vault-size-bar": true,
     "cryptomator-keep-alive": true,
-    "bases-kanban": true
+    "bases-kanban": true,
+    "bases-graph": true
   },
   "expandedSettings": {
     "cryptomator-keep-alive": false,
     "font-colors": false,
     "notion-like-icons": false,
     "vault-size-bar": false,
-    "bases-kanban": false
+    "bases-kanban": false,
+    "bases-graph": false
   },
   "modulesData": {
     "cryptomator-keep-alive": {
@@ -106,6 +108,35 @@
     },
     "vault-size-bar": {
       "fontSize": 10.5
+    },
+    "bases-kanban": {},
+    "bases-graph": {
+      "colorPalette": [
+        {
+          "hex": "#5fa4f5"
+        },
+        {
+          "hex": "#e3e3e3"
+        },
+        {
+          "hex": "#f59e0b"
+        },
+        {
+          "hex": "#10b981"
+        },
+        {
+          "hex": "#ec4899"
+        },
+        {
+          "hex": "#8b5cf6"
+        },
+        {
+          "hex": "#a8a29e"
+        },
+        {
+          "hex": "#f43f5e"
+        }
+      ]
     }
   }
 }

@@ -1,4 +1,4 @@
-import { Component, App, PluginManifest, TFile, BasesView } from 'obsidian';
+import { Component, App, PluginManifest, TFile, BasesView, Keymap } from 'obsidian';
 
 export const ExampleViewType = 'kanban';
 
@@ -14,6 +14,8 @@ export class BasesKanbanModule extends Component {
     manifest: PluginManifest;
     pluginInstance: any;
     moduleId: string;
+    
+    activeViews: MyBasesKanbanView[] = [];
 
     constructor(app: App, manifest: PluginManifest, pluginInstance: any, moduleId: string) {
         super();
@@ -27,6 +29,10 @@ export class BasesKanbanModule extends Component {
         this.registerBasesKanbanLayout();
     }
 
+    public removeView(view: MyBasesKanbanView) {
+        this.activeViews = this.activeViews.filter(v => v !== view);
+    }
+
     private registerBasesKanbanLayout() {
         if (typeof (this.pluginInstance as any).registerBasesView !== 'function') {
             return;
@@ -36,16 +42,51 @@ export class BasesKanbanModule extends Component {
             name: 'Kanban',
             icon: 'lucide-kanban',
             factory: (controller: any, containerEl: HTMLElement) => {
-                return new MyBasesKanbanView(controller, containerEl);
+                const view = new MyBasesKanbanView(controller, containerEl, this);
+                this.activeViews.push(view);
+                return view;
             },
-            options: () => [
-                {
-                    type: 'property',
-                    displayName: 'Group by property',
-                    key: 'groupByProperty',
-                    placeholder: 'Select target property...'
-                }
-            ]
+            options: (config: any) => {
+                const currentProp = config.get('groupByProperty') || "note.status";
+                const view = this.activeViews.find(v => v.config === config);
+                
+                // Get all properties currently available in the dataset
+                const allProps = view?.allProperties || [];
+                const propsToRender = new Set(allProps);
+                propsToRender.add(currentProp); // Ensure the active prop is always included
+
+                const optionsList: any[] = [
+                    {
+                        type: 'property',
+                        displayName: 'Group by property',
+                        key: 'groupByProperty',
+                        placeholder: 'Select target property...',
+                        filter: (prop: string) => {
+                            if (view && view.allProperties && view.allProperties.length > 0) {
+                                return view.allProperties.includes(prop as any);
+                            }
+                            return true;
+                        }
+                    }
+                ];
+
+                // Dynamically generate a hidden multitext for every property
+                propsToRender.forEach(prop => {
+                    optionsList.push({
+                        type: 'multitext',
+                        displayName: 'Kanban Columns',
+                        key: `columnOrder_${prop}`,
+                        default: [],
+                        shouldHide: () => {
+                            // Reactively hide this component if it doesn't match the dropdown
+                            const activeProp = config.get('groupByProperty') || "note.status";
+                            return activeProp !== prop;
+                        }
+                    });
+                });
+
+                return optionsList;
+            }
         });
     }
 
@@ -62,30 +103,40 @@ export class MyBasesKanbanView extends BasesView {
     readonly type = ExampleViewType; 
     private controller: any;
     private containerEl: HTMLElement;
+    private moduleInstance: BasesKanbanModule;
 
-    constructor(controller: any, containerEl: HTMLElement) {
+    constructor(controller: any, containerEl: HTMLElement, moduleInstance: BasesKanbanModule) {
         super(controller); 
         this.controller = controller;
         this.containerEl = containerEl;
+        this.moduleInstance = moduleInstance;
+    }
+
+    public onunload(): void {
+        this.moduleInstance.removeView(this);
+        super.onunload();
     }
 
     public onDataUpdated(): void {
-        // HARD RESET DESTRUCTIVE WORKFLOW: Completely wipe structural styles and classes to avoid colliding with other view layouts
         this.containerEl.empty();
         this.containerEl.removeClass("bases-kanban-view-wrapper");
         this.containerEl.removeAttribute("style");
 
         const targetProperty = (this.config?.get('groupByProperty') as string) || "note.status";
-        const entries: any[] = (this as any).data?.data || [];
+        const orderKey = `columnOrder_${targetProperty}`;
+        
+        const entries: any[] = this.data?.data || [];
         const detectedValuesSet = new Set<string>();
 
-        // Fetch saved dictionaries natively out of the core config profiles
         const rawTitles = this.config?.get('columnTitles');
         const rawColors = this.config?.get('columnColors');
 
         const columnTitlesRegistry: Record<string, string> = rawTitles && typeof rawTitles === 'object' ? { ...rawTitles } : {};
         const columnColorsRegistry: Record<string, string> = rawColors && typeof rawColors === 'object' ? { ...rawColors } : {};
 
+        const visibleProperties = this.config?.getOrder() || [];
+
+        // 1. Initial scan: Find all statuses present inside the vault files
         entries.forEach((entry: any) => {
             if (entry && typeof entry.getValue === 'function') {
                 const valueWrapper = entry.getValue(targetProperty);
@@ -98,12 +149,30 @@ export class MyBasesKanbanView extends BasesView {
             }
         });
 
-        let columnsList = Array.from(detectedValuesSet);
-        if (columnsList.includes("null")) {
-            columnsList = ["null", ...columnsList.filter(v => v !== "null")];
+        // 2. Pull the uniquely scoped array list
+        let savedOrder = this.config?.get(orderKey) as string[] | undefined;
+        
+        // 3. Auto-seed if the property hasn't been configured yet
+        if (!savedOrder || savedOrder.length === 0) {
+            savedOrder = Array.from(detectedValuesSet);
+            if (savedOrder.includes("null")) {
+                savedOrder = ["null", ...savedOrder.filter(v => v !== "null")];
+            } else {
+                savedOrder.unshift("null");
+            }
+            
+            this.config?.set(orderKey, savedOrder);
+            if (this.controller && typeof this.controller.save === 'function') {
+                this.controller.save(); 
+            }
+        } else {
+            if (!savedOrder.includes("null")) {
+                savedOrder.unshift("null");
+            }
         }
 
-        // Apply style rules down isolated structural elements instead of mutating the base root container directly
+        const columnsList = [...savedOrder];
+
         const columnsWrapper = this.containerEl.createDiv({ cls: "kanban-columns-container" });
         columnsWrapper.style.cssText = "display: flex; gap: 16px; overflow-x: auto; padding: 15px; align-items: flex-start; height: 100%; width: 100%; box-sizing: border-box;";
 
@@ -122,11 +191,56 @@ export class MyBasesKanbanView extends BasesView {
                 columnEl.style.backgroundColor = "var(--background-primary-alt)";
             }
 
+            columnEl.addEventListener("dragover", (e: DragEvent) => {
+                if (e.dataTransfer?.types.includes("application/x-kanban-column")) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.dataTransfer.dropEffect = "move";
+                }
+            });
+
+            columnEl.addEventListener("drop", async (e: DragEvent) => {
+                if (!e.dataTransfer?.types.includes("application/x-kanban-column")) return;
+                
+                e.preventDefault();
+                e.stopPropagation();
+
+                const draggedCol = e.dataTransfer.getData("application/x-kanban-column");
+                if (!draggedCol || draggedCol === columnValue) return;
+
+                const currentOrder = columnsList.slice();
+                const draggedIdx = currentOrder.indexOf(draggedCol);
+                const targetIdx = currentOrder.indexOf(columnValue);
+
+                if (draggedIdx > -1 && targetIdx > -1) {
+                    currentOrder.splice(draggedIdx, 1);
+                    currentOrder.splice(targetIdx, 0, draggedCol);
+                    
+                    this.config?.set(orderKey, currentOrder); 
+                    if (this.controller && typeof this.controller.save === 'function') {
+                        await this.controller.save();
+                    }
+                    this.onDataUpdated();
+                }
+            });
+
             const headerOuterRow = columnEl.createDiv({ cls: "kanban-column-header-outer" });
             headerOuterRow.style.cssText = "min-height: 32px; display: flex; align-items: center; margin-bottom: 12px; width: 100%; position: relative;";
+            
+            headerOuterRow.setAttribute("draggable", "true");
+            headerOuterRow.addEventListener("dragstart", (e: DragEvent) => {
+                e.dataTransfer?.setData("application/x-kanban-column", columnValue);
+                setTimeout(() => { columnEl.style.opacity = "0.5"; }, 0);
+                e.stopPropagation();
+            });
+            headerOuterRow.addEventListener("dragend", (e: DragEvent) => {
+                columnEl.style.opacity = "1";
+                e.stopPropagation();
+            });
 
             const headerWrapper = headerOuterRow.createDiv({ cls: "kanban-column-header-wrapper" });
-            headerWrapper.style.cssText = "display: flex; justify-content: space-between; align-items: center; cursor: pointer; width: 100%;";
+            headerWrapper.style.cssText = "display: flex; justify-content: space-between; align-items: center; cursor: grab; width: 100%;";
+            headerWrapper.title = "Drag to reorder column / Right-click to edit";
 
             const headerEl = headerWrapper.createEl("h3", { text: savedTitle, cls: "kanban-column-header" });
             headerEl.style.cssText = "margin: 0; font-size: 0.85rem; letter-spacing: 0.5px; font-weight: 600; color: var(--text-normal); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-grow: 1;";
@@ -158,25 +272,144 @@ export class MyBasesKanbanView extends BasesView {
                         }
                     }
 
+                    if (!columnsList.includes(currentStatus)) {
+                        currentStatus = "null";
+                    }
+
                     if (currentStatus === columnValue) {
-                        const cardEl = cardsContainer.createDiv({ cls: "kanban-card", text: file.basename });
+                        const cardEl = cardsContainer.createDiv({ cls: "kanban-card" });
                         cardEl.setAttribute("draggable", "true");
-                        cardEl.style.cssText = "background: var(--background-primary); border: 1px solid var(--background-modifier-border); padding: 10px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); font-size: 0.9rem; color: var(--text-normal); cursor: grab; user-select: none; margin-bottom: 2px;";
+                        cardEl.style.cssText = "background: var(--background-primary); border: 1px solid var(--background-modifier-border); padding: 10px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); cursor: grab; user-select: none; margin-bottom: 2px; display: flex; flex-direction: column; gap: 8px;";
                         
+                        cardEl.createDiv({ cls: "kanban-card-title", text: file.basename }).style.cssText = "font-size: 0.9rem; color: var(--text-normal); font-weight: 500;";
+
+                        if (visibleProperties.length > 0) {
+                            const propsContainer = cardEl.createDiv({ cls: "kanban-card-properties" });
+                            propsContainer.style.cssText = "display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--background-modifier-border); padding-top: 8px; margin-top: 4px;";
+
+                            visibleProperties.forEach((propId: any) => {
+                                const propValue = entry.getValue(propId);
+                                
+                                if (propValue && typeof propValue.toString === 'function' && propValue.toString().trim() !== "") {
+                                    const friendlyName = this.config?.getDisplayName(propId) || propId;
+
+                                    try {
+                                        let items: any[] = [];
+                                        if (propValue && typeof (propValue as any).length === 'function' && typeof (propValue as any).get === 'function') {
+                                            const len = (propValue as any).length();
+                                            for (let i = 0; i < len; i++) items.push((propValue as any).get(i));
+                                        } else if (Array.isArray(propValue)) {
+                                            items = propValue;
+                                        } else {
+                                            items = [propValue];
+                                        }
+
+                                        const hasLinks = items.some(item => item && item.toString().includes('[['));
+
+                                        const propRow = propsContainer.createDiv({ cls: "kanban-card-property-row" });
+                                        let valContainer: HTMLElement;
+
+                                        if (hasLinks) {
+                                            propRow.style.cssText = "display: flex; flex-direction: column; align-items: flex-start; gap: 4px; font-size: 0.75rem; color: var(--text-muted); line-height: 1.3;";
+                                            propRow.createDiv({ text: friendlyName + ":", cls: "kanban-card-property-label" }).style.cssText = "opacity: 0.8; font-weight: 500;";
+                                            
+                                            valContainer = propRow.createDiv({ cls: "kanban-card-property-value" });
+                                            valContainer.style.cssText = "width: 100%; color: var(--text-normal); display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left; word-break: break-word;";
+                                        } else {
+                                            propRow.style.cssText = "display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; font-size: 0.75rem; color: var(--text-muted); line-height: 1.3;";
+                                            propRow.createSpan({ text: friendlyName, cls: "kanban-card-property-label" }).style.cssText = "min-width: 70px; opacity: 0.8;";
+                                            
+                                            valContainer = propRow.createDiv({ cls: "kanban-card-property-value" });
+                                            valContainer.style.cssText = "flex-grow: 1; color: var(--text-normal); display: flex; flex-direction: column; align-items: flex-end; gap: 4px; text-align: right; word-break: break-word;";
+                                        }
+
+                                        items.forEach(item => {
+                                            if (item === null || item === undefined) return;
+                                            const str = item.toString().trim();
+                                            if (!str) return;
+
+                                            const itemWrapper = valContainer.createDiv();
+                                            if (hasLinks) {
+                                                itemWrapper.style.cssText = "display: flex; flex-wrap: wrap; justify-content: flex-start; column-gap: 4px; text-align: left; width: 100%;";
+                                            } else {
+                                                itemWrapper.style.cssText = "display: flex; flex-wrap: wrap; justify-content: flex-end; column-gap: 4px; text-align: right; width: 100%;";
+                                            }
+
+                                            const linkRegex = /\[\[(.*?)\]\]/g;
+                                            let match;
+                                            let lastIndex = 0;
+
+                                            while ((match = linkRegex.exec(str)) !== null) {
+                                                if (match.index > lastIndex) {
+                                                    const preText = str.slice(lastIndex, match.index).trim();
+                                                    if (preText && preText !== ',') {
+                                                        itemWrapper.createSpan({ text: preText.replace(/^,|,$/g, '').trim() });
+                                                    }
+                                                }
+
+                                                const inner = match[1];
+                                                let linkPath = inner;
+                                                let displayAlias = null;
+                                                
+                                                if (inner.includes('|')) {
+                                                    const parts = inner.split('|');
+                                                    linkPath = parts[0];
+                                                    displayAlias = parts[1];
+                                                }
+
+                                                const resolvedFile = this.app.metadataCache.getFirstLinkpathDest(linkPath, "");
+                                                const textToShow = displayAlias || (resolvedFile ? resolvedFile.basename : linkPath);
+
+                                                const linkEl = itemWrapper.createEl("a", { text: textToShow, cls: "internal-link" });
+                                                linkEl.style.cssText = "color: var(--text-accent); text-decoration: underline; cursor: pointer;";
+                                                
+                                                if (resolvedFile) {
+                                                    linkEl.onclick = async (e) => {
+                                                        e.preventDefault();
+                                                        e.stopPropagation();
+                                                        const paneType = Keymap.isModEvent(e as any) || 'tab';
+                                                        const newLeaf = this.app.workspace.getLeaf(paneType as any);
+                                                        await newLeaf.openFile(resolvedFile);
+                                                    };
+                                                }
+
+                                                lastIndex = linkRegex.lastIndex;
+                                            }
+
+                                            if (lastIndex < str.length) {
+                                                const postText = str.slice(lastIndex).trim();
+                                                if (postText && postText !== ',') {
+                                                    itemWrapper.createSpan({ text: postText.replace(/^,|,$/g, '').trim() });
+                                                }
+                                            }
+                                        });
+
+                                    } catch (e) {
+                                        console.error("Kanban text fallback error:", e);
+                                        const propRow = propsContainer.createDiv({ cls: "kanban-card-property-row" });
+                                        propRow.style.cssText = "display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; font-size: 0.75rem; color: var(--text-muted); line-height: 1.3;";
+                                        propRow.createSpan({ text: friendlyName, cls: "kanban-card-property-label" }).style.cssText = "min-width: 70px; opacity: 0.8;";
+                                        propRow.createDiv({ text: propValue.toString(), cls: "kanban-card-property-value" }).style.cssText = "flex-grow: 1; color: var(--text-normal); text-align: right; word-break: break-word;";
+                                    }
+                                }
+                            });
+                        }
+
                         cardEl.addEventListener("dblclick", async (ev: MouseEvent) => {
                             ev.preventDefault();
                             const newLeaf = this.app.workspace.getLeaf('tab');
                             await newLeaf.openFile(file);
                         });
 
-                        cardEl.setAttribute("draggable", "true");
                         cardEl.addEventListener("dragstart", (dragEv: DragEvent) => {
                             dragEv.dataTransfer?.setData("text/plain", file.path);
                             cardEl.style.opacity = "0.4";
+                            dragEv.stopPropagation(); 
                         });
 
-                        cardEl.addEventListener("dragend", () => {
+                        cardEl.addEventListener("dragend", (dragEv: DragEvent) => {
                             cardEl.style.opacity = "1";
+                            dragEv.stopPropagation();
                         });
                     }
                 }
@@ -301,11 +534,17 @@ export class MyBasesKanbanView extends BasesView {
 
     private initializeDropZone(container: HTMLElement, targetProperty: string) {
         container.addEventListener("dragover", (e: DragEvent) => {
-            e.preventDefault();
+            if (e.dataTransfer?.types.includes("text/plain")) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
         });
 
         container.addEventListener("drop", async (e: DragEvent) => {
+            if (!e.dataTransfer?.types.includes("text/plain")) return;
+            
             e.preventDefault();
+            e.stopPropagation(); 
 
             const filePath = e.dataTransfer?.getData("text/plain");
             const destinationValue = container.dataset.columnValue;

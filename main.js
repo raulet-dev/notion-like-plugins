@@ -22,7 +22,7 @@ __export(main_exports, {
   default: () => MasterOrchestratorPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian6 = require("obsidian");
+var import_obsidian7 = require("obsidian");
 
 // src/modules/cryptomator-keep-alive.ts
 var import_obsidian = require("obsidian");
@@ -1012,6 +1012,7 @@ var BasesKanbanModule = class extends import_obsidian5.Component {
   manifest;
   pluginInstance;
   moduleId;
+  activeViews = [];
   constructor(app, manifest, pluginInstance, moduleId) {
     super();
     this.app = app;
@@ -1022,6 +1023,9 @@ var BasesKanbanModule = class extends import_obsidian5.Component {
   async onload() {
     this.registerBasesKanbanLayout();
   }
+  removeView(view) {
+    this.activeViews = this.activeViews.filter((v) => v !== view);
+  }
   registerBasesKanbanLayout() {
     if (typeof this.pluginInstance.registerBasesView !== "function") {
       return;
@@ -1030,16 +1034,44 @@ var BasesKanbanModule = class extends import_obsidian5.Component {
       name: "Kanban",
       icon: "lucide-kanban",
       factory: (controller, containerEl) => {
-        return new MyBasesKanbanView(controller, containerEl);
+        const view = new MyBasesKanbanView(controller, containerEl, this);
+        this.activeViews.push(view);
+        return view;
       },
-      options: () => [
-        {
-          type: "property",
-          displayName: "Group by property",
-          key: "groupByProperty",
-          placeholder: "Select target property..."
-        }
-      ]
+      options: (config) => {
+        const currentProp = config.get("groupByProperty") || "note.status";
+        const view = this.activeViews.find((v) => v.config === config);
+        const allProps = view?.allProperties || [];
+        const propsToRender = new Set(allProps);
+        propsToRender.add(currentProp);
+        const optionsList = [
+          {
+            type: "property",
+            displayName: "Group by property",
+            key: "groupByProperty",
+            placeholder: "Select target property...",
+            filter: (prop) => {
+              if (view && view.allProperties && view.allProperties.length > 0) {
+                return view.allProperties.includes(prop);
+              }
+              return true;
+            }
+          }
+        ];
+        propsToRender.forEach((prop) => {
+          optionsList.push({
+            type: "multitext",
+            displayName: "Kanban Columns",
+            key: `columnOrder_${prop}`,
+            default: [],
+            shouldHide: () => {
+              const activeProp = config.get("groupByProperty") || "note.status";
+              return activeProp !== prop;
+            }
+          });
+        });
+        return optionsList;
+      }
     });
   }
   renderSettings(containerEl) {
@@ -1053,22 +1085,30 @@ var MyBasesKanbanView = class extends import_obsidian5.BasesView {
   type = ExampleViewType;
   controller;
   containerEl;
-  constructor(controller, containerEl) {
+  moduleInstance;
+  constructor(controller, containerEl, moduleInstance) {
     super(controller);
     this.controller = controller;
     this.containerEl = containerEl;
+    this.moduleInstance = moduleInstance;
+  }
+  onunload() {
+    this.moduleInstance.removeView(this);
+    super.onunload();
   }
   onDataUpdated() {
     this.containerEl.empty();
     this.containerEl.removeClass("bases-kanban-view-wrapper");
     this.containerEl.removeAttribute("style");
     const targetProperty = this.config?.get("groupByProperty") || "note.status";
+    const orderKey = `columnOrder_${targetProperty}`;
     const entries = this.data?.data || [];
     const detectedValuesSet = /* @__PURE__ */ new Set();
     const rawTitles = this.config?.get("columnTitles");
     const rawColors = this.config?.get("columnColors");
     const columnTitlesRegistry = rawTitles && typeof rawTitles === "object" ? { ...rawTitles } : {};
     const columnColorsRegistry = rawColors && typeof rawColors === "object" ? { ...rawColors } : {};
+    const visibleProperties = this.config?.getOrder() || [];
     entries.forEach((entry) => {
       if (entry && typeof entry.getValue === "function") {
         const valueWrapper = entry.getValue(targetProperty);
@@ -1080,10 +1120,24 @@ var MyBasesKanbanView = class extends import_obsidian5.BasesView {
         }
       }
     });
-    let columnsList = Array.from(detectedValuesSet);
-    if (columnsList.includes("null")) {
-      columnsList = ["null", ...columnsList.filter((v) => v !== "null")];
+    let savedOrder = this.config?.get(orderKey);
+    if (!savedOrder || savedOrder.length === 0) {
+      savedOrder = Array.from(detectedValuesSet);
+      if (savedOrder.includes("null")) {
+        savedOrder = ["null", ...savedOrder.filter((v) => v !== "null")];
+      } else {
+        savedOrder.unshift("null");
+      }
+      this.config?.set(orderKey, savedOrder);
+      if (this.controller && typeof this.controller.save === "function") {
+        this.controller.save();
+      }
+    } else {
+      if (!savedOrder.includes("null")) {
+        savedOrder.unshift("null");
+      }
     }
+    const columnsList = [...savedOrder];
     const columnsWrapper = this.containerEl.createDiv({ cls: "kanban-columns-container" });
     columnsWrapper.style.cssText = "display: flex; gap: 16px; overflow-x: auto; padding: 15px; align-items: flex-start; height: 100%; width: 100%; box-sizing: border-box;";
     columnsList.forEach((columnValue) => {
@@ -1096,10 +1150,49 @@ var MyBasesKanbanView = class extends import_obsidian5.BasesView {
       if (!hasCustomColor) {
         columnEl.style.backgroundColor = "var(--background-primary-alt)";
       }
+      columnEl.addEventListener("dragover", (e) => {
+        if (e.dataTransfer?.types.includes("application/x-kanban-column")) {
+          e.preventDefault();
+          e.stopPropagation();
+          e.dataTransfer.dropEffect = "move";
+        }
+      });
+      columnEl.addEventListener("drop", async (e) => {
+        if (!e.dataTransfer?.types.includes("application/x-kanban-column")) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const draggedCol = e.dataTransfer.getData("application/x-kanban-column");
+        if (!draggedCol || draggedCol === columnValue) return;
+        const currentOrder = columnsList.slice();
+        const draggedIdx = currentOrder.indexOf(draggedCol);
+        const targetIdx = currentOrder.indexOf(columnValue);
+        if (draggedIdx > -1 && targetIdx > -1) {
+          currentOrder.splice(draggedIdx, 1);
+          currentOrder.splice(targetIdx, 0, draggedCol);
+          this.config?.set(orderKey, currentOrder);
+          if (this.controller && typeof this.controller.save === "function") {
+            await this.controller.save();
+          }
+          this.onDataUpdated();
+        }
+      });
       const headerOuterRow = columnEl.createDiv({ cls: "kanban-column-header-outer" });
       headerOuterRow.style.cssText = "min-height: 32px; display: flex; align-items: center; margin-bottom: 12px; width: 100%; position: relative;";
+      headerOuterRow.setAttribute("draggable", "true");
+      headerOuterRow.addEventListener("dragstart", (e) => {
+        e.dataTransfer?.setData("application/x-kanban-column", columnValue);
+        setTimeout(() => {
+          columnEl.style.opacity = "0.5";
+        }, 0);
+        e.stopPropagation();
+      });
+      headerOuterRow.addEventListener("dragend", (e) => {
+        columnEl.style.opacity = "1";
+        e.stopPropagation();
+      });
       const headerWrapper = headerOuterRow.createDiv({ cls: "kanban-column-header-wrapper" });
-      headerWrapper.style.cssText = "display: flex; justify-content: space-between; align-items: center; cursor: pointer; width: 100%;";
+      headerWrapper.style.cssText = "display: flex; justify-content: space-between; align-items: center; cursor: grab; width: 100%;";
+      headerWrapper.title = "Drag to reorder column / Right-click to edit";
       const headerEl = headerWrapper.createEl("h3", { text: savedTitle, cls: "kanban-column-header" });
       headerEl.style.cssText = "margin: 0; font-size: 0.85rem; letter-spacing: 0.5px; font-weight: 600; color: var(--text-normal); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-grow: 1;";
       headerWrapper.addEventListener("contextmenu", (e) => {
@@ -1124,22 +1217,118 @@ var MyBasesKanbanView = class extends import_obsidian5.BasesView {
               }
             }
           }
+          if (!columnsList.includes(currentStatus)) {
+            currentStatus = "null";
+          }
           if (currentStatus === columnValue) {
-            const cardEl = cardsContainer.createDiv({ cls: "kanban-card", text: file.basename });
+            const cardEl = cardsContainer.createDiv({ cls: "kanban-card" });
             cardEl.setAttribute("draggable", "true");
-            cardEl.style.cssText = "background: var(--background-primary); border: 1px solid var(--background-modifier-border); padding: 10px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); font-size: 0.9rem; color: var(--text-normal); cursor: grab; user-select: none; margin-bottom: 2px;";
+            cardEl.style.cssText = "background: var(--background-primary); border: 1px solid var(--background-modifier-border); padding: 10px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); cursor: grab; user-select: none; margin-bottom: 2px; display: flex; flex-direction: column; gap: 8px;";
+            cardEl.createDiv({ cls: "kanban-card-title", text: file.basename }).style.cssText = "font-size: 0.9rem; color: var(--text-normal); font-weight: 500;";
+            if (visibleProperties.length > 0) {
+              const propsContainer = cardEl.createDiv({ cls: "kanban-card-properties" });
+              propsContainer.style.cssText = "display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--background-modifier-border); padding-top: 8px; margin-top: 4px;";
+              visibleProperties.forEach((propId) => {
+                const propValue = entry.getValue(propId);
+                if (propValue && typeof propValue.toString === "function" && propValue.toString().trim() !== "") {
+                  const friendlyName = this.config?.getDisplayName(propId) || propId;
+                  try {
+                    let items = [];
+                    if (propValue && typeof propValue.length === "function" && typeof propValue.get === "function") {
+                      const len = propValue.length();
+                      for (let i = 0; i < len; i++) items.push(propValue.get(i));
+                    } else if (Array.isArray(propValue)) {
+                      items = propValue;
+                    } else {
+                      items = [propValue];
+                    }
+                    const hasLinks = items.some((item) => item && item.toString().includes("[["));
+                    const propRow = propsContainer.createDiv({ cls: "kanban-card-property-row" });
+                    let valContainer;
+                    if (hasLinks) {
+                      propRow.style.cssText = "display: flex; flex-direction: column; align-items: flex-start; gap: 4px; font-size: 0.75rem; color: var(--text-muted); line-height: 1.3;";
+                      propRow.createDiv({ text: friendlyName + ":", cls: "kanban-card-property-label" }).style.cssText = "opacity: 0.8; font-weight: 500;";
+                      valContainer = propRow.createDiv({ cls: "kanban-card-property-value" });
+                      valContainer.style.cssText = "width: 100%; color: var(--text-normal); display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left; word-break: break-word;";
+                    } else {
+                      propRow.style.cssText = "display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; font-size: 0.75rem; color: var(--text-muted); line-height: 1.3;";
+                      propRow.createSpan({ text: friendlyName, cls: "kanban-card-property-label" }).style.cssText = "min-width: 70px; opacity: 0.8;";
+                      valContainer = propRow.createDiv({ cls: "kanban-card-property-value" });
+                      valContainer.style.cssText = "flex-grow: 1; color: var(--text-normal); display: flex; flex-direction: column; align-items: flex-end; gap: 4px; text-align: right; word-break: break-word;";
+                    }
+                    items.forEach((item) => {
+                      if (item === null || item === void 0) return;
+                      const str = item.toString().trim();
+                      if (!str) return;
+                      const itemWrapper = valContainer.createDiv();
+                      if (hasLinks) {
+                        itemWrapper.style.cssText = "display: flex; flex-wrap: wrap; justify-content: flex-start; column-gap: 4px; text-align: left; width: 100%;";
+                      } else {
+                        itemWrapper.style.cssText = "display: flex; flex-wrap: wrap; justify-content: flex-end; column-gap: 4px; text-align: right; width: 100%;";
+                      }
+                      const linkRegex = /\[\[(.*?)\]\]/g;
+                      let match;
+                      let lastIndex = 0;
+                      while ((match = linkRegex.exec(str)) !== null) {
+                        if (match.index > lastIndex) {
+                          const preText = str.slice(lastIndex, match.index).trim();
+                          if (preText && preText !== ",") {
+                            itemWrapper.createSpan({ text: preText.replace(/^,|,$/g, "").trim() });
+                          }
+                        }
+                        const inner = match[1];
+                        let linkPath = inner;
+                        let displayAlias = null;
+                        if (inner.includes("|")) {
+                          const parts = inner.split("|");
+                          linkPath = parts[0];
+                          displayAlias = parts[1];
+                        }
+                        const resolvedFile = this.app.metadataCache.getFirstLinkpathDest(linkPath, "");
+                        const textToShow = displayAlias || (resolvedFile ? resolvedFile.basename : linkPath);
+                        const linkEl = itemWrapper.createEl("a", { text: textToShow, cls: "internal-link" });
+                        linkEl.style.cssText = "color: var(--text-accent); text-decoration: underline; cursor: pointer;";
+                        if (resolvedFile) {
+                          linkEl.onclick = async (e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const paneType = import_obsidian5.Keymap.isModEvent(e) || "tab";
+                            const newLeaf = this.app.workspace.getLeaf(paneType);
+                            await newLeaf.openFile(resolvedFile);
+                          };
+                        }
+                        lastIndex = linkRegex.lastIndex;
+                      }
+                      if (lastIndex < str.length) {
+                        const postText = str.slice(lastIndex).trim();
+                        if (postText && postText !== ",") {
+                          itemWrapper.createSpan({ text: postText.replace(/^,|,$/g, "").trim() });
+                        }
+                      }
+                    });
+                  } catch (e) {
+                    console.error("Kanban text fallback error:", e);
+                    const propRow = propsContainer.createDiv({ cls: "kanban-card-property-row" });
+                    propRow.style.cssText = "display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; font-size: 0.75rem; color: var(--text-muted); line-height: 1.3;";
+                    propRow.createSpan({ text: friendlyName, cls: "kanban-card-property-label" }).style.cssText = "min-width: 70px; opacity: 0.8;";
+                    propRow.createDiv({ text: propValue.toString(), cls: "kanban-card-property-value" }).style.cssText = "flex-grow: 1; color: var(--text-normal); text-align: right; word-break: break-word;";
+                  }
+                }
+              });
+            }
             cardEl.addEventListener("dblclick", async (ev) => {
               ev.preventDefault();
               const newLeaf = this.app.workspace.getLeaf("tab");
               await newLeaf.openFile(file);
             });
-            cardEl.setAttribute("draggable", "true");
             cardEl.addEventListener("dragstart", (dragEv) => {
               dragEv.dataTransfer?.setData("text/plain", file.path);
               cardEl.style.opacity = "0.4";
+              dragEv.stopPropagation();
             });
-            cardEl.addEventListener("dragend", () => {
+            cardEl.addEventListener("dragend", (dragEv) => {
               cardEl.style.opacity = "1";
+              dragEv.stopPropagation();
             });
           }
         }
@@ -1233,10 +1422,15 @@ var MyBasesKanbanView = class extends import_obsidian5.BasesView {
   }
   initializeDropZone(container, targetProperty) {
     container.addEventListener("dragover", (e) => {
-      e.preventDefault();
+      if (e.dataTransfer?.types.includes("text/plain")) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
     });
     container.addEventListener("drop", async (e) => {
+      if (!e.dataTransfer?.types.includes("text/plain")) return;
       e.preventDefault();
+      e.stopPropagation();
       const filePath = e.dataTransfer?.getData("text/plain");
       const destinationValue = container.dataset.columnValue;
       if (!filePath || !destinationValue) return;
@@ -1258,13 +1452,486 @@ var MyBasesKanbanView = class extends import_obsidian5.BasesView {
   }
 };
 
+// src/modules/bases-graph.ts
+var import_obsidian6 = require("obsidian");
+var BASES_GRAPH_DEFAULTS = {
+  colorPalette: [
+    { hex: "#5fa4f5" },
+    // Vibrant Blue
+    { hex: "#e3e3e3" },
+    // Off-White / Light Gray
+    { hex: "#f59e0b" },
+    // Amber / Orange
+    { hex: "#10b981" },
+    // Emerald Green
+    { hex: "#ec4899" },
+    // Pink
+    { hex: "#8b5cf6" },
+    // Purple
+    { hex: "#a8a29e" },
+    // Stone Gray
+    { hex: "#f43f5e" }
+    // Rose Red
+  ]
+};
+var BasesGraphModule = class extends import_obsidian6.Component {
+  app;
+  manifest;
+  pluginInstance;
+  moduleId;
+  constructor(app, manifest, pluginInstance, moduleId) {
+    super();
+    this.app = app;
+    this.manifest = manifest;
+    this.pluginInstance = pluginInstance;
+    this.moduleId = moduleId;
+  }
+  get settings() {
+    return this.pluginInstance.settings.modulesData[this.moduleId] || BASES_GRAPH_DEFAULTS;
+  }
+  async onload() {
+    this.registerGraphCodeBlock();
+  }
+  getColorsArray() {
+    if (this.settings.colorPalette && this.settings.colorPalette.length > 0) {
+      return this.settings.colorPalette.map((c) => c.hex);
+    }
+    return BASES_GRAPH_DEFAULTS.colorPalette.map((c) => c.hex);
+  }
+  registerGraphCodeBlock() {
+    if (typeof this.pluginInstance.registerMarkdownCodeBlockProcessor !== "function") return;
+    this.pluginInstance.registerMarkdownCodeBlockProcessor("graph", async (source, el, ctx) => {
+      el.empty();
+      el.addClass("bases-graph-render-container");
+      const config = this.parseConfig(source);
+      if (!config.path || !config.x) {
+        const errorEl = el.createEl("p", { text: '\u26A0\uFE0F Graph configuration requires "path" and "x" parameters.' });
+        errorEl.style.cssText = "color: var(--text-muted); font-size: 0.9rem;";
+        return;
+      }
+      const baseFile = this.app.metadataCache.getFirstLinkpathDest(config.path, "");
+      if (!baseFile) {
+        const errorEl = el.createEl("p", { text: `\u26A0\uFE0F Target database file "${config.path}" could not be located inside your vault.` });
+        errorEl.style.cssText = "color: var(--text-error); font-size: 0.9rem;";
+        return;
+      }
+      let resolvedXProp = config.x;
+      let resolvedYProp = config.y;
+      try {
+        const baseContent = await this.app.vault.read(baseFile);
+        const baseJson = JSON.parse(baseContent);
+        const propertiesMap = baseJson.properties || {};
+        for (const [propId, propDef] of Object.entries(propertiesMap)) {
+          const def = propDef;
+          const cleanTargetX = config.x.toLowerCase().replace(/[\s_-]/g, "");
+          if (def?.displayName && def.displayName.toLowerCase().replace(/[\s_-]/g, "") === cleanTargetX) {
+            resolvedXProp = propId;
+          }
+          if (config.y) {
+            const cleanTargetY = config.y.toLowerCase().replace(/[\s_-]/g, "");
+            if (def?.displayName && def.displayName.toLowerCase().replace(/[\s_-]/g, "") === cleanTargetY) {
+              resolvedYProp = propId;
+            }
+          }
+        }
+      } catch (e) {
+      }
+      const dataMatrix = this.collectMetricsData(config, baseFile.parent?.path || "", resolvedXProp, resolvedYProp);
+      if (dataMatrix.length === 0) {
+        const errorEl = el.createEl("p", { text: "\u{1F5C4}\uFE0F No matching properties metrics discovered across this directory section." });
+        errorEl.style.cssText = "color: var(--text-muted); font-size: 0.9rem;";
+        return;
+      }
+      switch (config.type) {
+        case "donut":
+          this.renderDonutChart(el, dataMatrix);
+          break;
+        case "line":
+          this.renderLineChart(el, dataMatrix);
+          break;
+        case "horizontal-bar":
+          this.renderHorizontalBarChart(el, dataMatrix);
+          break;
+        case "vertical-bar":
+        default:
+          this.renderVerticalBarChart(el, dataMatrix);
+          break;
+      }
+    });
+  }
+  parseConfig(source) {
+    const lines = source.split("\n");
+    const config = { type: "vertical-bar", grouped: "xy" };
+    lines.forEach((line) => {
+      const parts = line.split(":");
+      if (parts.length >= 2) {
+        const key = parts[0].trim().replace(/['"<>]/g, "");
+        const val = parts.slice(1).join(":").trim().replace(/['"<>]/g, "");
+        config[key] = val;
+      }
+    });
+    return config;
+  }
+  /**
+   * ADVANCED UNBOXING STRATEGY: Safely pulls flat strings out of deep database framework objects,
+   * arrays, or raw text links inside frontmatter configurations.
+   */
+  extractPropertyTokens(frontmatter, normalizedTargetKey) {
+    if (!frontmatter) return [];
+    let rawValue = null;
+    for (const key of Object.keys(frontmatter)) {
+      if (key.toLowerCase().replace(/[\s_-]/g, "") === normalizedTargetKey) {
+        rawValue = frontmatter[key];
+        break;
+      }
+    }
+    if (rawValue === void 0 || rawValue === null) return [];
+    const unwrapToken = (val) => {
+      if (val === void 0 || val === null) return "";
+      if (typeof val === "object") {
+        return String(val.value || val.display || val.name || val.path || val.link || "").trim();
+      }
+      return String(val).trim().replace(/^\[\[(.*?)\]\]$/, "$1");
+    };
+    if (Array.isArray(rawValue)) {
+      return rawValue.map((item) => unwrapToken(item)).filter((item) => item !== "");
+    }
+    const singleToken = unwrapToken(rawValue);
+    return singleToken !== "" ? [singleToken] : [];
+  }
+  collectMetricsData(config, parentFolderPath, resolvedX, resolvedY) {
+    const countsMap = /* @__PURE__ */ new Map();
+    const files = this.app.vault.getMarkdownFiles();
+    const cleanXProp = resolvedX.replace(/^note\./, "").toLowerCase().replace(/[\s_-]/g, "");
+    const cleanYProp = resolvedY ? resolvedY.replace(/^note\./, "").toLowerCase().replace(/[\s_-]/g, "") : null;
+    const groupingStrategy = config.grouped || "xy";
+    const dynamicColors = this.getColorsArray();
+    files.forEach((file) => {
+      if (parentFolderPath !== "" && !file.path.startsWith(parentFolderPath)) return;
+      const cache = this.app.metadataCache.getFileCache(file);
+      if (!cache?.frontmatter) return;
+      const xTokens = this.extractPropertyTokens(cache.frontmatter, cleanXProp);
+      const yTokens = cleanYProp ? this.extractPropertyTokens(cache.frontmatter, cleanYProp) : [];
+      if (cleanYProp) {
+        const label = xTokens.length > 0 ? xTokens[0] : "Unassigned";
+        const rawYValue = yTokens.length > 0 ? yTokens[0] : "0";
+        const parsedValue = parseFloat(rawYValue.replace(/[^0-9.]/g, "")) || 0;
+        if (groupingStrategy === "no") {
+          countsMap.set(`${file.basename} (${label})`, parsedValue);
+        } else {
+          countsMap.set(label, (countsMap.get(label) || 0) + parsedValue);
+        }
+      } else {
+        if (groupingStrategy === "no") {
+          countsMap.set(file.basename, 1);
+        } else {
+          const processLabelsList = xTokens.length > 0 ? xTokens : ["Unassigned"];
+          processLabelsList.forEach((label) => {
+            countsMap.set(label, (countsMap.get(label) || 0) + 1);
+          });
+        }
+      }
+    });
+    return Array.from(countsMap.entries()).map(([label, value], idx) => ({
+      label,
+      value,
+      color: dynamicColors[idx % dynamicColors.length]
+    })).sort((a, b) => b.value - a.value);
+  }
+  // ==================== VISUALIZATION ENGINES ====================
+  renderDonutChart(parent, data) {
+    const total = data.reduce((sum, item) => sum + item.value, 0);
+    const svgNamespace = "http://www.w3.org/2000/svg";
+    const wrapper = parent.createDiv();
+    wrapper.style.cssText = "display: flex; flex-direction: column; align-items: center; width: 100%; max-width: 450px; position: relative;";
+    const svg = document.createElementNS(svgNamespace, "svg");
+    svg.setAttribute("viewBox", "0 0 360 360");
+    svg.setAttribute("width", "100%");
+    svg.style.maxHeight = "320px";
+    const radius = 120;
+    const circumference = 2 * Math.PI * radius;
+    let runningAngleOffset = -90;
+    data.forEach((item) => {
+      const percentage = item.value / total;
+      const strokeDashOffset = circumference * (1 - percentage);
+      const rotation = runningAngleOffset;
+      const circle = document.createElementNS(svgNamespace, "circle");
+      circle.setAttribute("cx", "180");
+      circle.setAttribute("cy", "180");
+      circle.setAttribute("r", String(radius));
+      circle.setAttribute("fill", "transparent");
+      circle.setAttribute("stroke", item.color);
+      circle.setAttribute("stroke-width", "28");
+      circle.setAttribute("stroke-dasharray", String(circumference));
+      circle.setAttribute("stroke-dashoffset", String(strokeDashOffset));
+      circle.setAttribute("transform", `rotate(${rotation} 180 180)`);
+      svg.appendChild(circle);
+      runningAngleOffset += percentage * 360;
+    });
+    const textGroup = document.createElementNS(svgNamespace, "g");
+    textGroup.setAttribute("text-anchor", "middle");
+    const countTxt = document.createElementNS(svgNamespace, "text");
+    countTxt.setAttribute("x", "180");
+    countTxt.setAttribute("y", "185");
+    countTxt.setAttribute("fill", "#ffffff");
+    countTxt.setAttribute("style", "font-size: 56px; font-weight: 700; font-family: system-ui;");
+    countTxt.textContent = String(total);
+    const subTxt = document.createElementNS(svgNamespace, "text");
+    subTxt.setAttribute("x", "180");
+    subTxt.setAttribute("y", "220");
+    subTxt.setAttribute("fill", "#666666");
+    subTxt.setAttribute("style", "font-size: 14px; font-weight: 500; letter-spacing: 0.5px; font-family: system-ui;");
+    subTxt.textContent = "Total";
+    textGroup.appendChild(countTxt);
+    textGroup.appendChild(subTxt);
+    svg.appendChild(textGroup);
+    wrapper.appendChild(svg);
+    const legendGrid = wrapper.createDiv();
+    legendGrid.style.cssText = "display: flex; flex-direction: column; gap: 8px; margin-top: 15px; width: 100%; font-family: system-ui; font-size: 0.85rem;";
+    data.forEach((item) => {
+      const row = legendGrid.createDiv();
+      row.style.cssText = "display: flex; align-items: center; justify-content: space-between; color: #888;";
+      const leftWrap = row.createDiv();
+      leftWrap.style.cssText = "display: flex; align-items: center; gap: 8px;";
+      const dot = leftWrap.createDiv();
+      dot.style.cssText = `width: 10px; height: 10px; border-radius: 50%; background: ${item.color};`;
+      const labelSpan = leftWrap.createEl("span", { text: item.label });
+      labelSpan.style.cssText = "color: #fff; font-weight: 500;";
+      const valueSpan = row.createEl("span", { text: `${item.value} (${(item.value / total * 100).toFixed(1)}%)` });
+      valueSpan.style.cssText = "color: #666;";
+    });
+  }
+  renderVerticalBarChart(parent, data) {
+    const maxValue = Math.max(...data.map((d) => d.value), 1);
+    const yTicksMax = Math.ceil(maxValue / 8) * 8;
+    const svgNamespace = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(svgNamespace, "svg");
+    svg.setAttribute("viewBox", "0 0 500 320");
+    svg.setAttribute("width", "100%");
+    svg.style.maxHeight = "320px";
+    const gridGroup = document.createElementNS(svgNamespace, "g");
+    for (let i = 0; i <= 4; i++) {
+      const yVal = 40 + i * 55;
+      const tickValue = yTicksMax - i * (yTicksMax / 4);
+      const line = document.createElementNS(svgNamespace, "line");
+      line.setAttribute("x1", "50");
+      line.setAttribute("y1", String(yVal));
+      line.setAttribute("x2", "470");
+      line.setAttribute("y2", String(yVal));
+      line.setAttribute("stroke", "#222");
+      line.setAttribute("stroke-dasharray", "3,3");
+      gridGroup.appendChild(line);
+      const label = document.createElementNS(svgNamespace, "text");
+      label.setAttribute("x", "30");
+      label.setAttribute("y", String(yVal + 4));
+      label.setAttribute("fill", "#666");
+      label.setAttribute("style", "font-size: 12px; font-family: system-ui; text-anchor: right;");
+      label.textContent = String(tickValue);
+      gridGroup.appendChild(label);
+    }
+    svg.appendChild(gridGroup);
+    const barWidth = 32;
+    const chartSpacing = 420 / data.length;
+    data.forEach((item, index) => {
+      const xPos = 50 + index * chartSpacing + chartSpacing / 2 - barWidth / 2;
+      const pct = item.value / yTicksMax;
+      const barHeight = pct * 220;
+      const yPos = 260 - barHeight;
+      const rect = document.createElementNS(svgNamespace, "rect");
+      rect.setAttribute("x", String(xPos));
+      rect.setAttribute("y", String(yPos));
+      rect.setAttribute("width", String(barWidth));
+      rect.setAttribute("height", String(barHeight));
+      rect.setAttribute("fill", item.color);
+      rect.setAttribute("rx", "3");
+      svg.appendChild(rect);
+      const valLabel = document.createElementNS(svgNamespace, "text");
+      valLabel.setAttribute("x", String(xPos + barWidth / 2));
+      valLabel.setAttribute("y", String(yPos - 8));
+      valLabel.setAttribute("fill", "#fff");
+      valLabel.setAttribute("text-anchor", "middle");
+      valLabel.setAttribute("style", "font-size: 12px; font-weight: 600; font-family: system-ui;");
+      valLabel.textContent = String(item.value);
+      svg.appendChild(valLabel);
+      const axisLabel = document.createElementNS(svgNamespace, "text");
+      axisLabel.setAttribute("x", String(xPos + barWidth / 2));
+      axisLabel.setAttribute("y", "285");
+      axisLabel.setAttribute("fill", "#888");
+      axisLabel.setAttribute("text-anchor", "middle");
+      axisLabel.setAttribute("style", "font-size: 12px; font-family: system-ui; font-weight: 500;");
+      axisLabel.textContent = item.label.length > 14 ? item.label.substring(0, 12) + ".." : item.label;
+      svg.appendChild(axisLabel);
+    });
+    parent.appendChild(svg);
+  }
+  renderHorizontalBarChart(parent, data) {
+    const maxValue = Math.max(...data.map((d) => d.value), 1);
+    const xTicksMax = Math.ceil(maxValue / 8) * 8;
+    const svgNamespace = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(svgNamespace, "svg");
+    svg.setAttribute("viewBox", "0 0 500 260");
+    svg.setAttribute("width", "100%");
+    for (let i = 0; i <= 4; i++) {
+      const xVal = 100 + i * 85;
+      const tickValue = i * (xTicksMax / 4);
+      const line = document.createElementNS(svgNamespace, "line");
+      line.setAttribute("x1", String(xVal));
+      line.setAttribute("y1", "30");
+      line.setAttribute("x2", String(xVal));
+      line.setAttribute("y2", "210");
+      line.setAttribute("stroke", "#222");
+      line.setAttribute("stroke-dasharray", "3,3");
+      svg.appendChild(line);
+      const label = document.createElementNS(svgNamespace, "text");
+      label.setAttribute("x", String(xVal));
+      label.setAttribute("y", "230");
+      label.setAttribute("fill", "#666");
+      label.setAttribute("text-anchor", "middle");
+      label.setAttribute("style", "font-size: 11px; font-family: system-ui;");
+      label.textContent = String(tickValue);
+      svg.appendChild(label);
+    }
+    const barHeight = 20;
+    const rowSpacing = 180 / data.length;
+    data.forEach((item, index) => {
+      const yPos = 40 + index * rowSpacing + rowSpacing / 2 - barHeight / 2;
+      const pct = item.value / xTicksMax;
+      const barWidth = pct * 340;
+      const titleLabel = document.createElementNS(svgNamespace, "text");
+      titleLabel.setAttribute("x", "85");
+      titleLabel.setAttribute("y", String(yPos + barHeight / 2 + 4));
+      titleLabel.setAttribute("fill", "#888");
+      titleLabel.setAttribute("text-anchor", "end");
+      titleLabel.setAttribute("style", "font-size: 12px; font-family: system-ui; font-weight: 500;");
+      titleLabel.textContent = item.label.length > 12 ? item.label.substring(0, 10) + ".." : item.label;
+      svg.appendChild(titleLabel);
+      const rect = document.createElementNS(svgNamespace, "rect");
+      rect.setAttribute("x", "100");
+      rect.setAttribute("y", String(yPos));
+      rect.setAttribute("width", String(barWidth));
+      rect.setAttribute("height", String(barHeight));
+      rect.setAttribute("fill", item.color);
+      rect.setAttribute("rx", "3");
+      svg.appendChild(rect);
+      const countLabel = document.createElementNS(svgNamespace, "text");
+      countLabel.setAttribute("x", String(106 + barWidth));
+      countLabel.setAttribute("y", String(yPos + barHeight / 2 + 4));
+      countLabel.setAttribute("fill", "#fff");
+      countLabel.setAttribute("style", "font-size: 12px; font-weight: 600; font-family: system-ui;");
+      countLabel.textContent = String(item.value);
+      svg.appendChild(countLabel);
+    });
+    parent.appendChild(svg);
+  }
+  renderLineChart(parent, data) {
+    const maxValue = Math.max(...data.map((d) => d.value), 1);
+    const yTicksMax = Math.ceil(maxValue / 8) * 8;
+    const svgNamespace = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(svgNamespace, "svg");
+    svg.setAttribute("viewBox", "0 0 500 320");
+    svg.setAttribute("width", "100%");
+    for (let i = 0; i <= 4; i++) {
+      const yVal = 40 + i * 55;
+      const tickValue = yTicksMax - i * (yTicksMax / 4);
+      const line = document.createElementNS(svgNamespace, "line");
+      line.setAttribute("x1", "60");
+      line.setAttribute("y1", String(yVal));
+      line.setAttribute("x2", "460");
+      line.setAttribute("y2", String(yVal));
+      line.setAttribute("stroke", "#222");
+      line.setAttribute("stroke-dasharray", "3,3");
+      svg.appendChild(line);
+      const label = document.createElementNS(svgNamespace, "text");
+      label.setAttribute("x", "35");
+      label.setAttribute("y", String(yVal + 4));
+      label.setAttribute("fill", "#666");
+      label.setAttribute("style", "font-size: 11px; font-family: system-ui;");
+      label.textContent = String(tickValue);
+      svg.appendChild(label);
+    }
+    const chartSpacing = 400 / (data.length > 1 ? data.length - 1 : 1);
+    let pathCoordinatesString = "";
+    const pointsArray = [];
+    data.forEach((item, index) => {
+      const xPos = data.length > 1 ? 60 + index * chartSpacing : 260;
+      const pct = item.value / yTicksMax;
+      const yPos = 260 - pct * 220;
+      pointsArray.push({ x: xPos, y: yPos, item });
+      pathCoordinatesString += (index === 0 ? "M " : " L ") + xPos + " " + yPos;
+    });
+    if (pointsArray.length > 0) {
+      const polyLine = document.createElementNS(svgNamespace, "path");
+      polyLine.setAttribute("d", pathCoordinatesString);
+      polyLine.setAttribute("fill", "none");
+      polyLine.setAttribute("stroke", "#5fa4f5");
+      polyLine.setAttribute("stroke-width", "3");
+      svg.appendChild(polyLine);
+    }
+    pointsArray.forEach((pt) => {
+      const dot = document.createElementNS(svgNamespace, "circle");
+      dot.setAttribute("cx", String(pt.x));
+      dot.setAttribute("cy", String(pt.y));
+      dot.setAttribute("r", "5");
+      dot.setAttribute("fill", "#5fa4f5");
+      dot.setAttribute("stroke", "#141414");
+      dot.setAttribute("stroke-width", "1.5");
+      svg.appendChild(dot);
+      const txt = document.createElementNS(svgNamespace, "text");
+      txt.setAttribute("x", String(pt.x));
+      txt.setAttribute("y", String(pt.y - 12));
+      txt.setAttribute("fill", "#fff");
+      txt.setAttribute("text-anchor", "middle");
+      txt.setAttribute("style", "font-size: 12px; font-weight: 600; font-family: system-ui;");
+      txt.textContent = String(pt.item.value);
+      svg.appendChild(txt);
+      const axisTxt = document.createElementNS(svgNamespace, "text");
+      axisTxt.setAttribute("x", String(pt.x));
+      axisTxt.setAttribute("y", "285");
+      axisTxt.setAttribute("fill", "#888");
+      axisTxt.setAttribute("text-anchor", "middle");
+      axisTxt.setAttribute("style", "font-size: 12px; font-family: system-ui; font-weight: 500;");
+      axisTxt.textContent = pt.item.label;
+      svg.appendChild(axisTxt);
+    });
+    parent.appendChild(svg);
+  }
+  // ==================== CONFIGURATION SETTINGS MENU GENERATOR ====================
+  renderSettings(containerEl) {
+    containerEl.createEl("h3", { text: "Metrics Graphs Palette Settings" });
+    const descEl = containerEl.createEl("p", {
+      text: "Customize the sequence of hex color groups applied successively to chart values inside metric elements."
+    });
+    descEl.style.cssText = "color: var(--text-muted); font-size: 0.85rem; margin-bottom: 15px;";
+    this.settings.colorPalette.forEach((colorItem, index) => {
+      const s = new import_obsidian6.Setting(containerEl).setName(`Palette Vector Slot #${index + 1}`);
+      const previewDot = s.nameEl.createEl("span", { cls: "graph-settings-preview-dot" });
+      previewDot.style.backgroundColor = colorItem.hex;
+      s.addColorPicker((cp) => cp.setValue(colorItem.hex).onChange(async (value) => {
+        colorItem.hex = value;
+        previewDot.style.backgroundColor = value;
+        await this.pluginInstance.saveSettings();
+      })).addButton((btn) => btn.setButtonText("Remove").setWarning().onClick(async () => {
+        this.settings.colorPalette.splice(index, 1);
+        await this.pluginInstance.saveSettings();
+        this.pluginInstance.refreshSettingsUi();
+      }));
+    });
+    new import_obsidian6.Setting(containerEl).setName("Add Custom Palette Color").addButton((btn) => btn.setButtonText("Add Color Step").setCta().onClick(async () => {
+      this.settings.colorPalette.push({ hex: "#5fa4f5" });
+      await this.pluginInstance.saveSettings();
+      this.pluginInstance.refreshSettingsUi();
+    }));
+  }
+};
+
 // src/modules.ts
 var autoModules = {
   "cryptomator-keep-alive": { classRef: CryptomatorKeepAliveModule, defaults: CRYPTOMATOR_KEEP_ALIVE_DEFAULTS },
   "font-colors": { classRef: FontColorsModule, defaults: FONT_COLORS_DEFAULTS },
   "notion-like-icons": { classRef: NotionIconsModule, defaults: NOTION_ICONS_DEFAULTS },
   "vault-size-bar": { classRef: VaultSizeBarModule, defaults: VAULT_SIZE_BAR_DEFAULTS },
-  "bases-kanban": { classRef: BasesKanbanModule, defaults: BASES_KANBAN_DEFAULTS }
+  "bases-kanban": { classRef: BasesKanbanModule, defaults: BASES_KANBAN_DEFAULTS },
+  "bases-graph": { classRef: BasesGraphModule, defaults: BASES_GRAPH_DEFAULTS }
 };
 
 // src/main.ts
@@ -1273,7 +1940,7 @@ var DEFAULT_SETTINGS = {
   expandedSettings: {},
   modulesData: {}
 };
-var MasterOrchestratorPlugin = class extends import_obsidian6.Plugin {
+var MasterOrchestratorPlugin = class extends import_obsidian7.Plugin {
   activeInstances = {};
   async onload() {
     await this.loadSettings();
@@ -1321,7 +1988,7 @@ var MasterOrchestratorPlugin = class extends import_obsidian6.Plugin {
     Object.keys(this.activeInstances).forEach((id) => this.stopModule(id));
   }
 };
-var OrchestratorSettingTab = class extends import_obsidian6.PluginSettingTab {
+var OrchestratorSettingTab = class extends import_obsidian7.PluginSettingTab {
   plugin;
   constructor(app, plugin) {
     super(app, plugin);
@@ -1340,7 +2007,7 @@ var OrchestratorSettingTab = class extends import_obsidian6.PluginSettingTab {
       moduleSectionEl.style.padding = "12px";
       moduleSectionEl.style.marginBottom = "12px";
       moduleSectionEl.style.backgroundColor = "var(--background-primary-alt)";
-      const mainRowSetting = new import_obsidian6.Setting(moduleSectionEl).setName(displayTitle).setDesc(`Workspace component feature extension module [${id}].`).addToggle((toggle) => toggle.setValue(isModuleEnabled).onChange(async (value) => {
+      const mainRowSetting = new import_obsidian7.Setting(moduleSectionEl).setName(displayTitle).setDesc(`Workspace component feature extension module [${id}].`).addToggle((toggle) => toggle.setValue(isModuleEnabled).onChange(async (value) => {
         this.plugin.settings.enabledModules[id] = value;
         await this.plugin.saveSettings();
         if (value) {
