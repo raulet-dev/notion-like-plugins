@@ -94,7 +94,7 @@ Creates standard 7z whole-vault archives in a configurable folder. New backups c
 * **Manual control:** Includes a “Back up now” button plus a live list of available backups with restore and delete actions.
 * **Selectable compression:** Uses standard 7z presets for no compression, fast, balanced, or maximum compression.
 * **Optional standard encryption:** Uses 7z AES-256 encryption and encrypts archive filenames and headers.
-* **No stored password:** The password is requested in a popup and is not written to plugin settings.
+* **Optional device default password:** Save a default in the operating system's credential store, never in plugin settings. Manual backup and restore still show a password popup.
 * **Safer restore:** Tests and extracts into a temporary folder before overlaying the vault. Existing files absent from the archive are preserved.
 * **Immediate list refresh:** A completed backup or deletion appears in the backup list immediately.
 
@@ -104,7 +104,13 @@ The module is intentionally disabled on Obsidian Mobile because it requires dire
 
 The backup module requires [7-Zip](https://www.7-zip.org/) to be installed. On Windows it checks the normal `C:\Program Files\7-Zip\7z.exe` locations and then the system `PATH`. It also checks common `7z`, `7zz`, and `7za` executable names used on other desktop systems.
 
-After installing 7-Zip, restart Obsidian. The module settings include a **Check installation** button.
+After installing 7-Zip, restart Obsidian. Use a current official 7-Zip release; some older `p7zip` variants handle piped passwords differently. The module settings include a **Check installation** button that also checks encrypted password input.
+
+No native Node add-on is required for passwords. The plugin sends them to 7-Zip over a private standard-input pipe using Node's built-in process API. Before the first encrypted operation, it creates a disposable sample archive and verifies that this particular 7-Zip installation accepts a piped UTF-8 password, rejects a wrong password, and accepts the right one. If the check fails, encrypted operations stop. The check uses a random disposable password, never your backup password.
+
+Before distributing the plugin, test **Check installation**, an encrypted backup opened directly in 7-Zip, and a restore in a disposable vault on each supported operating system. The source-level compatibility check cannot replace a full end-to-end test.
+
+Saving a device default also needs no native Node add-on. On Windows the plugin calls Credential Manager through a short-lived, profile-free PowerShell process and Win32 `CredWriteW`/`CredReadW`/`CredDeleteW`. On macOS it uses the built-in `security` Keychain tool in stdin-command mode, verifies the saved value, and keeps the value out of process arguments. On Linux it uses `secret-tool` and Secret Service; install the OS `libsecret-tools` package if `secret-tool` is not already available, and ensure a Secret Service provider is running. If the credential store is unavailable, you can still type a password when prompted without saving a default. An existing default saved by the former keyring package may need to be saved again because the native tools may address it differently.
 
 #### Compression process
 
@@ -123,15 +129,19 @@ The plugin writes to a temporary `.partial` archive, asks 7-Zip to test the comp
 
 When **Encrypt backups** is enabled:
 
-1. The plugin displays a password popup before creating the archive.
-2. The password is confirmed to reduce the chance of creating an unrecoverable archive because of a typo.
+1. Manual backups always show a password popup. If a device default is saved, the popup offers **Use default password**; otherwise you must type and confirm a password.
+2. Automatic backups use the device default if one is saved. Otherwise they ask for a password, which is kept only in memory for scheduled backups in the current Obsidian session.
 3. 7-Zip derives its encryption key from that password and encrypts the archive with AES-256.
 4. Header encryption is enabled, so filenames and directory names are also hidden.
-5. The password is never saved in plugin settings.
+5. The password is never saved in plugin settings. A device default, if configured, lives in Windows Credential Manager, macOS Keychain, or Linux Secret Service.
+
+For encrypted creation, integrity testing, and recovery, the plugin starts 7-Zip with the bare `-p` option and sends your password through its private stdin pipe. Your password is not placed in command-line arguments, an environment variable, or a temporary file. Process output is never logged because some 7-Zip builds may echo password input. The one-time compatibility check uses its own random sample password on a disposable archive; that sample password is supplied on the command line only when independently verifying the check archive, never for a real backup.
+
+This addresses exposure of your password in process listings. It does not protect against malware or an administrator inspecting process memory. On Linux, the credential entry uses Secret Service; it does not fall back to a non-persistent kernel keyring or a plaintext settings file. The OS credential-store commands use private pipes and do not put your password in their command-line arguments, environment variables, or temporary files. The plugin does not log password-bearing command output.
 
 The password is a passphrase used by the standard 7z encryption system; it is not a raw 256-bit AES key. Use a long, unique, randomly generated password and store it safely. Losing it makes the archive unrecoverable.
 
-Manual backups always display the password popup. For scheduled encrypted backups, the first required password is kept only in memory for the current Obsidian session so later scheduled backups can run. Closing or reloading Obsidian clears it. If the automatic password popup is canceled, that scheduled backup is skipped.
+The **Default backup password** settings field is only for setting or replacing the device default. It is intentionally blank even when a default has been saved; a status line shows whether one exists. The **Remove** button deletes it from this device's credential store. The password is not synced to other computers. If an automatic backup has no saved default and its password popup is canceled, that scheduled backup is skipped.
 
 Encrypted backups end with `.encrypted.7z`. Unencrypted backups end with `.7z`.
 
@@ -139,7 +149,7 @@ Encrypted backups end with `.encrypted.7z`. Unencrypted backups end with `.7z`.
 
 1. Select **Restore** next to the backup.
 2. Confirm the overwrite warning.
-3. For an encrypted archive, enter its password in the popup.
+3. For an encrypted archive, enter its password in the popup or explicitly choose **Use default password** when a device default is available. A backup may use a different password from the default.
 4. The plugin asks 7-Zip to test the archive before extracting it into a temporary folder.
 5. After successful verification and extraction, recovered files are copied over the vault. Files already in the vault but absent from the backup are preserved.
 6. Restart Obsidian after the restore.

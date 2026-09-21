@@ -23,6 +23,7 @@ export const VAULT_BACKUP_DEFAULTS: VaultBackupSettings = {
 const ARCHIVE_MAGIC = 'NLVBK001';
 const ARCHIVE_HEADER_SIZE = 8 + 1 + 16 + 12;
 const AUTH_TAG_SIZE = 16;
+const CREDENTIAL_SERVICE = 'notion-like-plugins/vault-backup';
 
 interface BackupFileInfo {
     name: string;
@@ -329,8 +330,8 @@ class PasswordPromptModal extends Modal {
             new Notice('Enter an archive password.');
             return;
         }
-        if (password.includes('\0')) {
-            new Notice('The password cannot contain a null character.');
+        if (/[\x00-\x1f\x7f]/.test(password)) {
+            new Notice('The password cannot contain control characters.');
             return;
         }
         if (this.requireConfirmation && password !== (this.confirmationInput?.value ?? '')) {
@@ -342,6 +343,155 @@ class PasswordPromptModal extends Modal {
     }
 
     private finish(value: string | null, close = true) {
+        if (this.settled) return;
+        this.settled = true;
+        this.resolveResult(value);
+        if (close) this.close();
+    }
+}
+
+class ManualBackupPasswordModal extends Modal {
+    private settled = false;
+    private useDefault = false;
+    private passwordInput: HTMLInputElement | null = null;
+    private confirmationInput: HTMLInputElement | null = null;
+
+    constructor(
+        app: App,
+        private readonly defaultAvailable: boolean,
+        private readonly resolveResult: (value: { useDefault: boolean; password: string | null } | null) => void
+    ) {
+        super(app);
+    }
+
+    onOpen() {
+        this.contentEl.createEl('h2', { text: 'Create encrypted backup' });
+        this.contentEl.createEl('p', {
+            text: 'Enter a password for this backup, or choose the default password saved in this device’s credential store.'
+        });
+
+        if (this.defaultAvailable) {
+            new Setting(this.contentEl)
+                .setName('Use default password')
+                .setDesc('Use the password saved in this device’s credential store for this backup.')
+                .addToggle(toggle => toggle
+                    .setValue(false)
+                    .onChange(value => {
+                        this.useDefault = value;
+                        if (this.passwordInput) this.passwordInput.disabled = value;
+                        if (this.confirmationInput) this.confirmationInput.disabled = value;
+                    }));
+        }
+
+        new Setting(this.contentEl)
+            .setName('Password')
+            .addText(text => {
+                this.passwordInput = text.inputEl;
+                text.inputEl.type = 'password';
+                text.setPlaceholder('Archive password');
+            });
+        new Setting(this.contentEl)
+            .setName('Confirm password')
+            .addText(text => {
+                this.confirmationInput = text.inputEl;
+                text.inputEl.type = 'password';
+                text.setPlaceholder('Repeat archive password');
+            });
+
+        new Setting(this.contentEl)
+            .addButton(button => button.setButtonText('Cancel').onClick(() => this.finish(null)))
+            .addButton(button => button.setButtonText('Create backup').setCta().onClick(() => this.submit()));
+        window.setTimeout(() => this.passwordInput?.focus(), 0);
+    }
+
+    onClose() {
+        this.contentEl.empty();
+        if (!this.settled) this.finish(null, false);
+    }
+
+    private submit() {
+        if (this.useDefault && this.defaultAvailable) {
+            this.finish({ useDefault: true, password: null });
+            return;
+        }
+        const password = this.passwordInput?.value ?? '';
+        if (!password || /[\x00-\x1f\x7f]/.test(password)) {
+            new Notice('Enter a password without control characters.');
+            return;
+        }
+        if (password !== (this.confirmationInput?.value ?? '')) {
+            new Notice('The passwords do not match.');
+            this.confirmationInput?.focus();
+            return;
+        }
+        this.finish({ useDefault: false, password });
+    }
+
+    private finish(value: { useDefault: boolean; password: string | null } | null, close = true) {
+        if (this.settled) return;
+        this.settled = true;
+        this.resolveResult(value);
+        if (close) this.close();
+    }
+}
+
+class RecoveryPasswordModal extends Modal {
+    private settled = false;
+    private useDefault = false;
+    private passwordInput: HTMLInputElement | null = null;
+
+    constructor(
+        app: App,
+        private readonly defaultAvailable: boolean,
+        private readonly resolveResult: (value: { useDefault: boolean; password: string | null } | null) => void
+    ) {
+        super(app);
+    }
+
+    onOpen() {
+        this.contentEl.createEl('h2', { text: 'Unlock encrypted backup' });
+        this.contentEl.createEl('p', { text: 'Enter this archive’s password to verify and restore it.' });
+        if (this.defaultAvailable) {
+            new Setting(this.contentEl)
+                .setName('Use default password')
+                .setDesc('Use the password saved in this device’s credential store.')
+                .addToggle(toggle => toggle.setValue(false).onChange(value => {
+                    this.useDefault = value;
+                    if (this.passwordInput) this.passwordInput.disabled = value;
+                }));
+        }
+        new Setting(this.contentEl)
+            .setName('Password')
+            .addText(text => {
+                this.passwordInput = text.inputEl;
+                text.inputEl.type = 'password';
+                text.setPlaceholder('Archive password');
+            });
+        new Setting(this.contentEl)
+            .addButton(button => button.setButtonText('Cancel').onClick(() => this.finish(null)))
+            .addButton(button => button.setButtonText('Unlock and restore').setCta().onClick(() => this.submit()));
+        window.setTimeout(() => this.passwordInput?.focus(), 0);
+    }
+
+    onClose() {
+        this.contentEl.empty();
+        if (!this.settled) this.finish(null, false);
+    }
+
+    private submit() {
+        if (this.useDefault && this.defaultAvailable) {
+            this.finish({ useDefault: true, password: null });
+            return;
+        }
+        const password = this.passwordInput?.value ?? '';
+        if (!password || /[\x00-\x1f\x7f]/.test(password)) {
+            new Notice('Enter a password without control characters.');
+            return;
+        }
+        this.finish({ useDefault: false, password });
+    }
+
+    private finish(value: { useDefault: boolean; password: string | null } | null, close = true) {
         if (this.settled) return;
         this.settled = true;
         this.resolveResult(value);
@@ -425,6 +575,8 @@ export class VaultBackupModule extends Component {
     private lastCronMinute = '';
     private lastHandledAutomaticOccurrenceMs: number | null = null;
     private sevenZipExecutable: string | null = null;
+    private sevenZipPasswordPipeChecked = false;
+    private sevenZipReadPasswordModes: { t: boolean; x: boolean } | null = null;
     private sessionEncryptionPassword: string | null = null;
     private backupListContainer: HTMLElement | null = null;
 
@@ -457,6 +609,8 @@ export class VaultBackupModule extends Component {
     onunload() {
         this.sessionEncryptionPassword = null;
         this.sevenZipExecutable = null;
+        this.sevenZipPasswordPipeChecked = false;
+        this.sevenZipReadPasswordModes = null;
     }
 
     private async runScheduledBackupIfDue() {
@@ -634,6 +788,334 @@ export class VaultBackupModule extends Component {
         return this.runExecutable(await this.resolveSevenZipExecutable(), args, cwd);
     }
 
+    private async runSevenZipWithPassword(args: string[], password: string, stage: string, cwd?: string): Promise<void> {
+        if (/[\x00-\x1f\x7f]/.test(password)) {
+            throw new Error('Archive passwords cannot contain control characters.');
+        }
+        const executable = await this.resolveSevenZipExecutable();
+        await this.ensureSevenZipPasswordPipe(executable);
+        const command = args[0];
+        const includePasswordSwitch = command === 'a'
+            ? true
+            : command === 't' || command === 'x'
+                ? this.sevenZipReadPasswordModes?.[command]
+                : undefined;
+        if (includePasswordSwitch === undefined) throw new Error(`${stage}: unsupported 7-Zip password operation.`);
+        await this.runSevenZipPasswordPipe(executable, args, password, stage, cwd, 24 * 60 * 60_000, includePasswordSwitch);
+    }
+
+    private runSevenZipPasswordPipe(executable: string, args: string[], password: string, stage: string, cwd: string | undefined, timeoutMs: number, includePasswordSwitch: boolean): Promise<void> {
+        const { childProcess } = this.nodeModules();
+        return new Promise<void>((resolve, reject) => {
+            let child: any;
+            let settled = false;
+            let timeout: any = null;
+            let stderr = '';
+            let stdinFailed = false;
+            const diagnostic = () => {
+                // Never include stdout. It may echo the password on some 7-Zip builds.
+                const lines = stderr
+                    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')
+                    .split(/\r?\n|\r/)
+                    .map(line => line.trim())
+                    .filter(line => line && !/enter password\s*:/i.test(line))
+                    .map(line => line.split(password).join('[password redacted]'));
+                return lines.slice(-8).join(' | ').slice(0, 1200);
+            };
+            const finish = (error?: Error) => {
+                if (settled) return;
+                settled = true;
+                if (timeout) clearTimeout(timeout);
+                if (error) {
+                    try { child?.kill(); } catch (_) { /* Process may already have exited. */ }
+                    reject(error);
+                } else {
+                    resolve();
+                }
+            };
+            try {
+                child = childProcess.spawn(executable, [...args, ...(includePasswordSwitch ? ['-p'] : []), '-sccUTF-8'], {
+                    cwd,
+                    windowsHide: true,
+                    shell: false,
+                    stdio: ['pipe', 'pipe', 'pipe']
+                });
+            } catch (_) {
+                finish(new Error(`${stage}: could not start 7-Zip with a private password pipe.`));
+                return;
+            }
+            // Drain stdout without storing it. Only redacted stderr is used for diagnostics.
+            child.stdout.on('data', () => undefined);
+            child.stderr.on('data', (chunk: any) => { stderr = `${stderr}${String(chunk)}`.slice(-16384); });
+            child.stdin.on('error', () => { stdinFailed = true; });
+            child.once('error', () => finish(new Error(`${stage}: could not start 7-Zip with a private password pipe.`)));
+            child.once('close', (exitCode: number | null) => {
+                if (exitCode !== 0) {
+                    const detail = diagnostic();
+                    const pipeNote = stdinFailed ? ' The password input pipe closed early.' : '';
+                    finish(new Error(`${stage} failed (7-Zip exit code ${exitCode ?? 'unknown'}).${pipeNote}${detail ? ` 7-Zip error: ${detail}` : ' 7-Zip provided no error output.'}`));
+                } else {
+                    finish();
+                }
+            });
+            timeout = setTimeout(() => {
+                const detail = diagnostic();
+                finish(new Error(`${stage} timed out after ${Math.round(timeoutMs / 1000)} seconds.${detail ? ` 7-Zip error: ${detail}` : ''}`));
+            }, timeoutMs);
+            child.stdin.end(`${password}\n`, 'utf8');
+        });
+    }
+
+    private async ensureSevenZipPasswordPipe(executable: string): Promise<void> {
+        if (this.sevenZipPasswordPipeChecked) return;
+        const { fs, path, os, crypto } = this.nodeModules();
+        const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'obsidian-vault-7z-check-'));
+        // Exercise punctuation and UTF-8 without putting either password in argv.
+        const probePassword = `V7!@#$%^&*()_+-=[]{};:'",.<>?/\\|é${crypto.randomBytes(16).toString('hex')}`;
+        try {
+            const archive = path.join(directory, 'check.7z');
+            const sample = path.join(directory, 'check.txt');
+            await fs.promises.writeFile(sample, 'password-pipe-check', { flag: 'wx' });
+            await this.runSevenZipPasswordPipe(executable, ['a', '-t7z', archive, sample, '-mx=0', '-mhe=on', '-y', '-bd', '-bso0', '-bsp0', '-bse2'], probePassword, '7-Zip password-pipe creation check', directory, 60_000, true);
+            const selectReadMode = async (command: 't' | 'x'): Promise<boolean> => {
+                const failures: string[] = [];
+                for (const includePasswordSwitch of [false, true]) {
+                    const destination = path.join(directory, `extract-${includePasswordSwitch ? 'switch' : 'prompt'}`);
+                    const args = command === 't'
+                        ? ['t', archive, '-y', '-bd', '-bso0', '-bsp0', '-bse2']
+                        : ['x', archive, `-o${destination}`, '-y', '-bd', '-bso0', '-bsp0', '-bse2'];
+                    try {
+                        await this.runSevenZipPasswordPipe(executable, args, probePassword, `7-Zip password-pipe ${command} check`, directory, 60_000, includePasswordSwitch);
+                        return includePasswordSwitch;
+                    } catch (error) {
+                        const detail = error instanceof Error ? error.message : String(error);
+                        failures.push(`${includePasswordSwitch ? 'with -p' : 'without -p'}: ${detail}`);
+                    }
+                }
+                throw new Error(`7-Zip cannot ${command === 't' ? 'test' : 'extract'} its own encrypted archive using a piped password. ${failures.join(' | ')}`);
+            };
+            const t = await selectReadMode('t');
+            let wrongPasswordAccepted = false;
+            try {
+                await this.runSevenZipPasswordPipe(executable, ['t', archive, '-y', '-bd', '-bso0', '-bsp0', '-bse2'], 'wrong-password', '7-Zip wrong-password check', directory, 60_000, t);
+                wrongPasswordAccepted = true;
+            } catch (_) { /* The same pipe mode must reject an incorrect password. */ }
+            if (wrongPasswordAccepted) throw new Error('7-Zip created an archive that does not reject an incorrect password.');
+            const x = await selectReadMode('x');
+            this.sevenZipReadPasswordModes = { t, x };
+            this.sevenZipPasswordPipeChecked = true;
+        } catch (error) {
+            const detail = error instanceof Error ? error.message.split(probePassword).join('[probe password redacted]') : String(error);
+            throw new Error(`7-Zip password-pipe check failed: ${detail}`);
+        } finally {
+            await fs.promises.rm(directory, { recursive: true, force: true }).catch(() => undefined);
+        }
+    }
+
+    private credentialAccount(): string {
+        const { path, crypto } = this.nodeModules();
+        return crypto.createHash('sha256').update(path.resolve(this.vaultRoot())).digest('hex');
+    }
+
+    private runCredentialCommand(executable: string, args: string[], input?: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
+        const { childProcess, process } = this.nodeModules();
+        return new Promise((resolve, reject) => {
+            let child: any;
+            try {
+                child = childProcess.spawn(executable, args, {
+                    windowsHide: true,
+                    shell: false,
+                    stdio: ['pipe', 'pipe', 'pipe'],
+                    env: process.platform === 'win32' ? process.env : { ...process.env, LANG: 'C', LC_ALL: 'C' }
+                });
+            } catch (_) {
+                reject(new Error('Could not start the operating-system credential tool.'));
+                return;
+            }
+            let stdout = '';
+            let stderr = '';
+            let settled = false;
+            let timeout: any = null;
+            const finish = (error?: Error, code: number | null = null) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timeout);
+                if (error) reject(error);
+                else resolve({ code, stdout, stderr });
+            };
+            const append = (current: string, chunk: any) => `${current}${String(chunk)}`.slice(-65536);
+            child.stdout.on('data', (chunk: any) => { stdout = append(stdout, chunk); });
+            child.stderr.on('data', (chunk: any) => { stderr = append(stderr, chunk); });
+            child.once('error', () => finish(new Error('The operating-system credential tool is unavailable.')));
+            child.once('close', (code: number | null) => finish(undefined, code));
+            timeout = setTimeout(() => {
+                try { child.kill(); } catch (_) { /* The process may already have exited. */ }
+                finish(new Error('Timed out waiting for the operating-system credential store.'));
+            }, 5 * 60_000);
+            child.stdin.on('error', () => { /* A failed child is handled by its exit event. */ });
+            child.stdin.end(input ?? '');
+        });
+    }
+
+    private async runWindowsCredential(operation: 'read' | 'write' | 'delete', password?: string): Promise<string | null> {
+        // The encoded command contains only code and a vault-path hash. The secret crosses a private stdin pipe.
+        const { BufferClass } = this.nodeModules();
+        const target = `${CREDENTIAL_SERVICE}:${this.credentialAccount()}`;
+        const script = String.raw`
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class VaultBackupCredential {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct Credential {
+        public UInt32 Flags;
+        public UInt32 Type;
+        [MarshalAs(UnmanagedType.LPWStr)] public string TargetName;
+        [MarshalAs(UnmanagedType.LPWStr)] public string Comment;
+        public Int64 LastWritten;
+        public UInt32 CredentialBlobSize;
+        public IntPtr CredentialBlob;
+        public UInt32 Persist;
+        public UInt32 AttributeCount;
+        public IntPtr Attributes;
+        [MarshalAs(UnmanagedType.LPWStr)] public string TargetAlias;
+        [MarshalAs(UnmanagedType.LPWStr)] public string UserName;
+    }
+    [DllImport("Advapi32.dll", EntryPoint = "CredWriteW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool CredWrite(ref Credential credential, UInt32 flags);
+    [DllImport("Advapi32.dll", EntryPoint = "CredReadW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool CredRead(string target, UInt32 type, UInt32 flags, out IntPtr credential);
+    [DllImport("Advapi32.dll", EntryPoint = "CredDeleteW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool CredDelete(string target, UInt32 type, UInt32 flags);
+    [DllImport("Advapi32.dll", EntryPoint = "CredFree")]
+    private static extern void CredFree(IntPtr credential);
+    public static void Write(string target, byte[] secret) {
+        if (secret.Length > 2560) throw new ArgumentException("Password exceeds Windows Credential Manager's size limit.");
+        var item = new Credential { Type = 1, TargetName = target, CredentialBlobSize = (UInt32)secret.Length, Persist = 2 };
+        item.CredentialBlob = Marshal.AllocHGlobal(secret.Length);
+        try {
+            Marshal.Copy(secret, 0, item.CredentialBlob, secret.Length);
+            if (!CredWrite(ref item, 0)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        } finally {
+            Marshal.Copy(new byte[secret.Length], 0, item.CredentialBlob, secret.Length);
+            Marshal.FreeHGlobal(item.CredentialBlob);
+        }
+    }
+    public static byte[] Read(string target) {
+        IntPtr pointer;
+        if (!CredRead(target, 1, 0, out pointer)) {
+            int code = Marshal.GetLastWin32Error();
+            if (code == 1168) return null;
+            throw new Win32Exception(code);
+        }
+        try {
+            var item = (Credential)Marshal.PtrToStructure(pointer, typeof(Credential));
+            var secret = new byte[item.CredentialBlobSize];
+            Marshal.Copy(item.CredentialBlob, secret, 0, secret.Length);
+            return secret;
+        } finally { CredFree(pointer); }
+    }
+    public static void Delete(string target) {
+        if (!CredDelete(target, 1, 0) && Marshal.GetLastWin32Error() != 1168)
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+    }
+}
+'@
+$target = '${target}'
+${operation === 'write' ? "$secret = [Convert]::FromBase64String([Console]::In.ReadToEnd().Trim()); [VaultBackupCredential]::Write($target, $secret); [Console]::Out.Write('OK')" : operation === 'read' ? "$secret = [VaultBackupCredential]::Read($target); if ($null -eq $secret) { [Console]::Out.Write('MISSING') } else { [Console]::Out.Write('FOUND:' + [Convert]::ToBase64String($secret)) }" : "[VaultBackupCredential]::Delete($target); [Console]::Out.Write('OK')"}
+`;
+        const encoded = BufferClass.from(script, 'utf16le').toString('base64');
+        const input = operation === 'write' ? BufferClass.from(password ?? '', 'utf8').toString('base64') : undefined;
+        const result = await this.runCredentialCommand('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded], input);
+        if (result.code !== 0) throw new Error('Windows Credential Manager rejected the operation.');
+        if (operation === 'read') {
+            if (result.stdout === 'MISSING') return null;
+            if (!/^FOUND:[A-Za-z0-9+/]*={0,2}$/.test(result.stdout)) throw new Error('Windows Credential Manager returned an unexpected response.');
+            return BufferClass.from(result.stdout.slice(6), 'base64').toString('utf8');
+        }
+        if (result.stdout !== 'OK') throw new Error('Windows Credential Manager did not confirm the operation.');
+        return null;
+    }
+
+    private async saveMacCredential(password: string): Promise<void> {
+        const { BufferClass } = this.nodeModules();
+        // security -i reads commands from stdin. -X keeps the value out of argv and avoids shell quoting.
+        const encodedPassword = `NLVB1:${BufferClass.from(password, 'utf8').toString('base64')}`;
+        const hex = BufferClass.from(encodedPassword, 'utf8').toString('hex');
+        const command = `add-generic-password -U -a ${this.credentialAccount()} -s ${CREDENTIAL_SERVICE} -X ${hex}\n`;
+        if (command.length >= 4096) throw new Error('Password is too long for the macOS Keychain command interface.');
+        const result = await this.runCredentialCommand('/usr/bin/security', ['-i'], command);
+        if (result.code !== 0 || await this.getDefaultPassword() !== password) {
+            throw new Error('macOS Keychain did not confirm the saved password.');
+        }
+    }
+
+    private async getDefaultPassword(): Promise<string | null> {
+        const { process } = this.nodeModules();
+        const account = this.credentialAccount();
+        if (process.platform === 'win32') return this.runWindowsCredential('read');
+        if (process.platform === 'darwin') {
+            const result = await this.runCredentialCommand('/usr/bin/security', ['find-generic-password', '-a', account, '-s', CREDENTIAL_SERVICE, '-w']);
+            if (result.code === 0) {
+                const stored = result.stdout.replace(/\r?\n$/, '');
+                if (stored.startsWith('NLVB1:')) {
+                    const encoded = stored.slice(6);
+                    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
+                        throw new Error('macOS Keychain returned a damaged backup password.');
+                    }
+                    return this.nodeModules().BufferClass.from(encoded, 'base64').toString('utf8');
+                }
+                return stored || null;
+            }
+            if (/could not be found|item not found/i.test(result.stderr)) return null;
+            throw new Error('macOS Keychain could not read the default password.');
+        }
+        if (process.platform === 'linux') {
+            const result = await this.runCredentialCommand('secret-tool', ['lookup', 'service', CREDENTIAL_SERVICE, 'vault', account]);
+            if (result.code === 0) return result.stdout || null;
+            if (result.code === 1 && !result.stderr.trim()) return null;
+            throw new Error('Linux Secret Service could not read the default password.');
+        }
+        throw new Error('This operating system has no supported credential-store integration.');
+    }
+
+    private async saveDefaultPassword(password: string): Promise<void> {
+        if (!password || /[\x00-\x1f\x7f]/.test(password)) {
+            throw new Error('Enter a password without control characters.');
+        }
+        const { process } = this.nodeModules();
+        if (process.platform === 'win32') await this.runWindowsCredential('write', password);
+        else if (process.platform === 'darwin') await this.saveMacCredential(password);
+        else if (process.platform === 'linux') {
+            const result = await this.runCredentialCommand('secret-tool', ['store', '--label=Obsidian vault backup', 'service', CREDENTIAL_SERVICE, 'vault', this.credentialAccount()], password);
+            if (result.code !== 0) throw new Error('Linux Secret Service could not save the default password.');
+        } else throw new Error('This operating system has no supported credential-store integration.');
+        this.sessionEncryptionPassword = null;
+    }
+
+    private async removeDefaultPassword(): Promise<void> {
+        const { process } = this.nodeModules();
+        if (process.platform === 'win32') await this.runWindowsCredential('delete');
+        else if (process.platform === 'darwin') {
+            const result = await this.runCredentialCommand('/usr/bin/security', ['delete-generic-password', '-a', this.credentialAccount(), '-s', CREDENTIAL_SERVICE]);
+            if (result.code !== 0 && !/could not be found|item not found/i.test(result.stderr)) throw new Error('macOS Keychain could not remove the default password.');
+        } else if (process.platform === 'linux') {
+            const result = await this.runCredentialCommand('secret-tool', ['clear', 'service', CREDENTIAL_SERVICE, 'vault', this.credentialAccount()]);
+            if (result.code !== 0) throw new Error('Linux Secret Service could not remove the default password.');
+        } else throw new Error('This operating system has no supported credential-store integration.');
+        this.sessionEncryptionPassword = null;
+    }
+
+    private askForManualPassword(defaultAvailable: boolean): Promise<{ useDefault: boolean; password: string | null } | null> {
+        return new Promise(resolve => new ManualBackupPasswordModal(this.app, defaultAvailable, resolve).open());
+    }
+
+    private askForRecoveryPassword(defaultAvailable: boolean): Promise<{ useDefault: boolean; password: string | null } | null> {
+        return new Promise(resolve => new RecoveryPasswordModal(this.app, defaultAvailable, resolve).open());
+    }
+
     private askForPassword(
         title: string,
         message: string,
@@ -674,8 +1156,7 @@ export class VaultBackupModule extends Component {
             await closeWritable(listStream);
             if (fileCount === 0) throw new Error('The vault contains no files to back up.');
 
-            const passwordArgs = password ? [`-p${password}`, '-mhe=on'] : [];
-            await this.runSevenZip([
+            const createArgs = [
                 'a',
                 '-t7z',
                 partialPath,
@@ -687,19 +1168,22 @@ export class VaultBackupModule extends Component {
                 '-bso0',
                 '-bsp0',
                 '-bse2',
-                ...passwordArgs
-            ], this.vaultRoot());
+                ...(password ? ['-mhe=on'] : [])
+            ];
+            if (password) await this.runSevenZipWithPassword(createArgs, password, 'Create encrypted archive', this.vaultRoot());
+            else await this.runSevenZip(createArgs, this.vaultRoot());
 
-            await this.runSevenZip([
+            const testArgs = [
                 't',
                 partialPath,
                 '-y',
                 '-bd',
                 '-bso0',
                 '-bsp0',
-                '-bse2',
-                ...(password ? [`-p${password}`] : [])
-            ]);
+                '-bse2'
+            ];
+            if (password) await this.runSevenZipWithPassword(testArgs, password, 'Verify newly created archive');
+            else await this.runSevenZip(testArgs);
         } catch (error) {
             listStream.destroy();
             throw error;
@@ -721,21 +1205,36 @@ export class VaultBackupModule extends Component {
         const encrypted = Boolean(this.settings.encryptionEnabled);
         let password: string | null = null;
         if (encrypted) {
-            password = kind === 'automatic' ? this.sessionEncryptionPassword : null;
-            if (!password) {
-                password = await this.askForPassword(
-                    kind === 'automatic' ? 'Automatic encrypted backup' : 'Create encrypted backup',
-                    kind === 'automatic'
-                        ? 'Enter and confirm the 7z archive password. It will be kept only in memory for automatic backups until Obsidian closes.'
-                        : 'Enter and confirm the password for this standard AES-256 encrypted 7z archive. It is not saved to settings.',
-                    'Create backup',
-                    true
-                );
+            let defaultPassword: string | null = null;
+            try {
+                defaultPassword = await this.getDefaultPassword();
+            } catch (error) {
+                new Notice(`Default password is unavailable; you can enter one for this backup. ${error instanceof Error ? error.message : String(error)}`, 10000);
+            }
+
+            if (kind === 'automatic') {
+                password = defaultPassword || this.sessionEncryptionPassword;
                 if (!password) {
-                    if (kind === 'automatic') new Notice('Automatic encrypted backup skipped because no password was entered.');
+                    password = await this.askForPassword(
+                        'Automatic encrypted backup',
+                        'No default password is available on this device. Enter and confirm a password for scheduled backups in this Obsidian session.',
+                        'Create backup',
+                        true
+                    );
+                    if (!password) {
+                        new Notice('Automatic encrypted backup skipped because no password was entered.');
+                        return;
+                    }
+                    this.sessionEncryptionPassword = password;
+                }
+            } else {
+                const selection = await this.askForManualPassword(Boolean(defaultPassword));
+                if (!selection) return;
+                password = selection.useDefault ? defaultPassword : selection.password;
+                if (!password) {
+                    new Notice('No password was available for this manual backup.');
                     return;
                 }
-                this.sessionEncryptionPassword = password;
             }
         }
 
@@ -825,19 +1324,20 @@ export class VaultBackupModule extends Component {
     private async extractSevenZipToTemporaryDirectory(backup: BackupFileInfo, password: string | null): Promise<string> {
         const { fs, path, os } = this.nodeModules();
         const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'obsidian-vault-restore-'));
-        const passwordArgs = password ? [`-p${password}`] : [];
         try {
-            await this.runSevenZip([
+            const testArgs = [
                 't',
                 backup.absolutePath,
                 '-y',
                 '-bd',
                 '-bso0',
                 '-bsp0',
-                '-bse2',
-                ...passwordArgs
-            ]);
-            await this.runSevenZip([
+                '-bse2'
+            ];
+            if (password) await this.runSevenZipWithPassword(testArgs, password, 'Verify archive before restore');
+            else await this.runSevenZip(testArgs);
+
+            const extractArgs = [
                 'x',
                 backup.absolutePath,
                 `-o${tempRoot}`,
@@ -846,9 +1346,10 @@ export class VaultBackupModule extends Component {
                 '-bd',
                 '-bso0',
                 '-bsp0',
-                '-bse2',
-                ...passwordArgs
-            ]);
+                '-bse2'
+            ];
+            if (password) await this.runSevenZipWithPassword(extractArgs, password, 'Extract archive for restore');
+            else await this.runSevenZip(extractArgs);
             return tempRoot;
         } catch (error) {
             await fs.promises.rm(tempRoot, { recursive: true, force: true });
@@ -978,14 +1479,15 @@ export class VaultBackupModule extends Component {
 
         let password: string | null = null;
         if (backup.encrypted) {
-            password = await this.askForPassword(
-                'Unlock encrypted backup',
-                backup.format === '7z'
-                    ? 'Enter the password for this AES-256 encrypted 7z archive.'
-                    : 'Enter the password used by this legacy encrypted vault backup.',
-                'Unlock and restore',
-                false
-            );
+            let defaultPassword: string | null = null;
+            try {
+                defaultPassword = await this.getDefaultPassword();
+            } catch (error) {
+                new Notice(`Default password is unavailable; enter the archive password instead. ${error instanceof Error ? error.message : String(error)}`, 10000);
+            }
+            const selection = await this.askForRecoveryPassword(Boolean(defaultPassword));
+            if (!selection) return;
+            password = selection.useDefault ? defaultPassword : selection.password;
             if (!password) return;
         }
 
@@ -1158,9 +1660,12 @@ export class VaultBackupModule extends Component {
                 .setButtonText('Check installation')
                 .onClick(async () => {
                     this.sevenZipExecutable = null;
+                    this.sevenZipPasswordPipeChecked = false;
+                    this.sevenZipReadPasswordModes = null;
                     try {
                         const executable = await this.resolveSevenZipExecutable();
-                        new Notice(`7-Zip found: ${executable}`, 8000);
+                        await this.ensureSevenZipPasswordPipe(executable);
+                        new Notice(`7-Zip found and password-pipe check passed: ${executable}`, 8000);
                     } catch (error) {
                         new Notice(error instanceof Error ? error.message : String(error), 10000);
                     }
@@ -1168,7 +1673,7 @@ export class VaultBackupModule extends Component {
 
         new Setting(containerEl)
             .setName('Encrypt backups')
-            .setDesc('Uses standard 7z AES-256 encryption with encrypted filenames. The password is requested in a popup and is never saved to settings. Automatic backups reuse it only in memory until Obsidian closes.')
+            .setDesc('Uses standard 7z AES-256 encryption with encrypted filenames. Passwords go through a private input pipe; no native Node add-on is required. Automatic backups use the device’s saved default password, or prompt if none is available; manual backups always prompt.')
             .addToggle(toggle => toggle
                 .setValue(this.settings.encryptionEnabled)
                 .onChange(async value => {
@@ -1176,6 +1681,56 @@ export class VaultBackupModule extends Component {
                     if (!value) this.sessionEncryptionPassword = null;
                     await this.pluginInstance.saveSettings();
                 }));
+
+        let defaultPasswordInput: HTMLInputElement | null = null;
+        const defaultPasswordStatus = containerEl.createEl('p', {
+            text: 'Checking this device’s credential store…',
+            cls: 'setting-item-description'
+        });
+        const updateDefaultPasswordStatus = async () => {
+            try {
+                const saved = await this.getDefaultPassword();
+                defaultPasswordStatus.setText(saved
+                    ? 'A default password is saved in this device’s OS credential store. The field is intentionally never prefilled.'
+                    : 'No default password is saved on this device.');
+            } catch (error) {
+                defaultPasswordStatus.setText(`Credential store unavailable: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        };
+        new Setting(containerEl)
+            .setName('Default backup password')
+            .setDesc('Set or replace the device’s default password. It is stored in the OS credential store, not plugin settings. Leave this field empty to keep the current default unchanged.')
+            .addText(text => {
+                defaultPasswordInput = text.inputEl;
+                text.inputEl.type = 'password';
+                text.setPlaceholder('New default password');
+            })
+            .addButton(button => button
+                .setButtonText('Save')
+                .onClick(async () => {
+                    try {
+                        await this.saveDefaultPassword(defaultPasswordInput?.value ?? '');
+                        if (defaultPasswordInput) defaultPasswordInput.value = '';
+                        await updateDefaultPasswordStatus();
+                        new Notice('Default backup password saved in this device’s credential store.');
+                    } catch (error) {
+                        new Notice(`Could not save the default password: ${error instanceof Error ? error.message : String(error)}`, 10000);
+                    }
+                }))
+            .addButton(button => button
+                .setButtonText('Remove')
+                .setWarning()
+                .onClick(async () => {
+                    try {
+                        await this.removeDefaultPassword();
+                        if (defaultPasswordInput) defaultPasswordInput.value = '';
+                        await updateDefaultPasswordStatus();
+                        new Notice('Default backup password removed from this device.');
+                    } catch (error) {
+                        new Notice(`Could not remove the default password: ${error instanceof Error ? error.message : String(error)}`, 10000);
+                    }
+                }));
+        void updateDefaultPasswordStatus();
 
         new Setting(containerEl)
             .setName('Manual backup')

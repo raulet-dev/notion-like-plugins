@@ -145,8 +145,7 @@
       "cronExpression": "0 */6 * * *",
       "automaticBackupsToKeep": 10,
       "compressionMethod": "none",
-      "encryptionEnabled": true,
-      "encryptionKey": "quaintly-provoking-bagged-tapered-convene-startup"
+      "encryptionEnabled": true
     }
   }
 }
