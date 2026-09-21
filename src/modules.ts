@@ -5,6 +5,7 @@ import { NotionIconsModule, NOTION_ICONS_DEFAULTS } from './modules/notion-like-
 import { VaultSizeBarModule, VAULT_SIZE_BAR_DEFAULTS } from './modules/vault-size-bar';
 import { BasesKanbanModule, BASES_KANBAN_DEFAULTS } from './modules/bases-kanban';
 import { BasesGraphModule, BASES_GRAPH_DEFAULTS } from './modules/bases-graph';
+import { VaultBackupModule, VAULT_BACKUP_DEFAULTS } from './modules/vault-backup';
 
 interface ModuleMetadata {
     classRef: any;
@@ -17,5 +18,6 @@ export const autoModules: Record<string, ModuleMetadata> = {
     'notion-like-icons': { classRef: NotionIconsModule, defaults: NOTION_ICONS_DEFAULTS },
     'vault-size-bar': { classRef: VaultSizeBarModule, defaults: VAULT_SIZE_BAR_DEFAULTS },
     'bases-kanban': { classRef: BasesKanbanModule, defaults: BASES_KANBAN_DEFAULTS },
-    'bases-graph': { classRef: BasesGraphModule, defaults: BASES_GRAPH_DEFAULTS }
+    'bases-graph': { classRef: BasesGraphModule, defaults: BASES_GRAPH_DEFAULTS },
+    'vault-backup': { classRef: VaultBackupModule, defaults: VAULT_BACKUP_DEFAULTS }
 };

@@ -5,7 +5,8 @@
     "vault-size-bar": true,
     "cryptomator-keep-alive": true,
     "bases-kanban": true,
-    "bases-graph": true
+    "bases-graph": true,
+    "vault-backup": true
   },
   "expandedSettings": {
     "cryptomator-keep-alive": false,
@@ -13,7 +14,8 @@
     "notion-like-icons": false,
     "vault-size-bar": false,
     "bases-kanban": false,
-    "bases-graph": false
+    "bases-graph": false,
+    "vault-backup": true
   },
   "modulesData": {
     "cryptomator-keep-alive": {
@@ -137,6 +139,14 @@
           "hex": "#f43f5e"
         }
       ]
+    },
+    "vault-backup": {
+      "backupPath": "D:\\OneDrive\\Obsidian Backups",
+      "cronExpression": "0 */6 * * *",
+      "automaticBackupsToKeep": 10,
+      "compressionMethod": "none",
+      "encryptionEnabled": true,
+      "encryptionKey": "quaintly-provoking-bagged-tapered-convene-startup"
     }
   }
 }
